@@ -465,7 +465,7 @@ void EwiseTanh(const CudaArray& a, CudaArray* out) {
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Elementwise and scalar operations
+// Matrix Multiplication
 ////////////////////////////////////////////////////////////////////////////////
 
 __global__ void MatmulKernel(const scalar_t* a, const scalar_t* b, scalar_t* out,
@@ -512,6 +512,94 @@ void Matmul(const CudaArray& a, const CudaArray& b, CudaArray* out, uint32_t M, 
   dim3 grid((P + block.x - 1) / block.x, (M + block.y - 1) / block.y);
   MatmulKernel<<<grid, block>>>(a.ptr, b.ptr, out->ptr, M, N, P);
   /// END SOLUTION
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// SPARSE ATTENTION CUDA KERNELS
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Block-sparse matrix multiplication kernel for attention
+ * Optimized for sparse attention patterns
+ */
+__global__ void BlockSparseMatmulKernel(
+    const scalar_t* a, 
+    const scalar_t* b, 
+    const scalar_t* mask,
+    scalar_t* out,
+    uint32_t M, 
+    uint32_t N, 
+    uint32_t P,
+    uint32_t block_size
+) {
+  size_t row = blockIdx.y * blockDim.y + threadIdx.x;
+  size_t col = blockIdx.x * blockDim.x + threadIdx.y;
+  
+  if (row < M && col < P) {
+    // Check if this block is active in the mask
+    uint32_t block_row = row / block_size;
+    uint32_t block_col = col / block_size;
+    uint32_t n_blocks = (N + block_size - 1) / block_size;
+    
+    // If mask indicates this block is masked, set to zero
+    if (mask[block_row * n_blocks + block_col] > -1e9) {
+      scalar_t sum = 0.0f;
+      for (uint32_t k = 0; k < N; k++) {
+        sum += a[row * N + k] * b[k * P + col];
+      }
+      out[row * P + col] = sum;
+    } else {
+      out[row * P + col] = 0.0f;
+    }
+  }
+}
+
+void BlockSparseMatmul(
+    const CudaArray& a, 
+    const CudaArray& b,
+    const CudaArray& mask, 
+    CudaArray* out,
+    uint32_t M, 
+    uint32_t N, 
+    uint32_t P,
+    uint32_t block_size
+) {
+  dim3 block(16, 16);
+  dim3 grid((P + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+  BlockSparseMatmulKernel<<<grid, block>>>(a.ptr, b.ptr, mask.ptr, out->ptr, M, N, P, block_size);
+}
+
+/**
+ * Apply block-sparse mask to attention scores
+ */
+__global__ void ApplyBlockSparseMaskKernel(
+    scalar_t* scores,
+    const scalar_t* mask,
+    size_t seq_len,
+    size_t num_heads,
+    size_t batch_size
+) {
+  size_t batch_idx = blockIdx.z;
+  size_t head_idx = blockIdx.y;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t j = threadIdx.y;
+  
+  if (batch_idx < batch_size && head_idx < num_heads && i < seq_len && j < seq_len) {
+    size_t idx = ((batch_idx * num_heads + head_idx) * seq_len + i) * seq_len + j;
+    scores[idx] += mask[i * seq_len + j];
+  }
+}
+
+void ApplyBlockSparseMask(
+    CudaArray* scores,
+    const CudaArray& mask,
+    size_t seq_len,
+    size_t num_heads,
+    size_t batch_size
+) {
+  dim3 block(16, 16);
+  dim3 grid((seq_len + block.x - 1) / block.x, num_heads, batch_size);
+  ApplyBlockSparseMaskKernel<<<grid, block>>>(scores->ptr, mask.ptr, seq_len, num_heads, batch_size);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -649,6 +737,10 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
   m.def("ewise_tanh", EwiseTanh);
 
   m.def("matmul", Matmul);
+
+  // Sparse attention kernels
+  m.def("block_sparse_matmul", BlockSparseMatmul);
+  m.def("apply_block_sparse_mask", ApplyBlockSparseMask);
 
   m.def("reduce_max", ReduceMax);
   m.def("reduce_sum", ReduceSum);

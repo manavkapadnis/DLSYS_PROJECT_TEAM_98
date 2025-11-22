@@ -1,234 +1,387 @@
-# Integration Instructions
+# Integration Guide - Pythia-70M with Block-Sparse Attention
 
-## How to Integrate Pythia-70M into Needle Repository
+This guide provides step-by-step instructions for integrating the Pythia-70M sparse attention implementation into your Needle repository.
 
-### 1. File Placement
+## Prerequisites
 
-Copy the provided files to the following locations in your Needle repository:
+- Needle framework installed and working
+- Python 3.7+
+- CUDA 10.0+ (optional, for GPU acceleration)
+- HuggingFace datasets library (optional, for real datasets)
+
+## Step 1: File Placement
+
+Copy the following files to your Needle repository:
+
+### Core Implementation Files
 
 ```bash
-# Model and training files
-cp pythia_model.py <needle_root>/apps/
-cp train_pythia.py <needle_root>/apps/
-cp benchmark.py <needle_root>/apps/
-
 # Sparse attention module
-cp nn_sparse_attention.py <needle_root>/python/needle/nn/
+cp python/needle/nn/nn_sparse_attention.py <needle_repo>/python/needle/nn/
+
+# Update nn __init__
+cp python/needle/nn/__init__.py <needle_repo>/python/needle/nn/
+
+# Model implementation
+cp apps/pythia_model.py <needle_repo>/apps/
+
+# Training script
+cp apps/train_pythia.py <needle_repo>/apps/
+
+# Benchmark script
+cp apps/benchmark.py <needle_repo>/apps/
+
+# Quick start demo
+cp apps/quick_start.py <needle_repo>/apps/
+
+# Dataset utilities
+cp python/needle/data/datasets/text_dataset.py <needle_repo>/python/needle/data/datasets/
+```
+
+### CUDA Backend (Optional)
+
+```bash
+# CUDA kernels with sparse attention support
+cp src/ndarray_backend_cuda.cu <needle_repo>/src/
+```
+
+### Documentation
+
+```bash
+# Main documentation
+cp README.md <needle_repo>/
+
+# This integration guide
+cp INTEGRATION.md <needle_repo>/
 
 # Demo notebook
-cp demo_notebook.ipynb <needle_root>/
-
-# Documentation
-cp README.md <needle_root>/PYTHIA_README.md
+cp demo_notebook.ipynb <needle_repo>/
 ```
 
-### 2. Update Needle Module Imports
+## Step 2: Build the Project
 
-Add the sparse attention module to the nn package:
-
-**Edit: `<needle_root>/python/needle/nn/__init__.py`**
-
-```python
-# Add this line:
-from .nn_sparse_attention import *
-```
-
-### 3. Build Needle Backend
+### Rebuild CUDA Backend (if using CUDA)
 
 ```bash
-cd <needle_root>
+cd <needle_repo>
 make clean
 make
 ```
 
-### 4. Verify Installation
+This will compile the new CUDA kernels including the sparse attention operations.
 
-Run this test to verify everything is working:
+### Verify Build
+
+```bash
+python3 -c "import needle; print('Needle loaded successfully')"
+python3 -c "from needle.nn import nn_sparse_attention; print('Sparse attention module loaded')"
+```
+
+## Step 3: Install Dependencies
+
+### Required
+
+```bash
+pip install numpy
+```
+
+### Optional (for HuggingFace datasets)
+
+```bash
+pip install datasets transformers
+```
+
+### Optional (for visualization)
+
+```bash
+pip install matplotlib jupyter
+```
+
+## Step 4: Verification
+
+### Test 1: Import Check
 
 ```python
 import sys
 sys.path.append('./python')
 import needle as ndl
-from apps.pythia_model import create_pythia_70m
+from pythia_model import create_pythia_70m
+from needle.nn.nn_sparse_attention import BlockSparsePattern
 
-# Create model
+print("All imports successful!")
+```
+
+### Test 2: Model Creation
+
+```python
+import needle as ndl
+from pythia_model import create_pythia_70m
+
 device = ndl.cpu()
-model, config = create_pythia_70m(
+
+# Create dense model
+model_dense, config = create_pythia_70m(
+    vocab_size=10000,
+    max_seq_len=128,
     use_sparse_attention=False,
     device=device
 )
+print(f"Dense model created: {config.get_total_params() / 1e6:.1f}M parameters")
 
-print("✓ Model created successfully!")
-print(f"✓ Total parameters: ~{config.get_total_params() / 1e6:.1f}M")
+# Create sparse model
+model_sparse, config = create_pythia_70m(
+    vocab_size=10000,
+    max_seq_len=128,
+    use_sparse_attention=True,
+    device=device
+)
+print(f"Sparse model created: {config.get_total_params() / 1e6:.1f}M parameters")
 ```
 
-### 5. Run Examples
+### Test 3: Forward Pass
 
-#### Train Dense Model
+```python
+import numpy as np
+import needle as ndl
+from pythia_model import create_pythia_70m
+
+device = ndl.cpu()
+model, config = create_pythia_70m(use_sparse_attention=True, device=device)
+
+# Create sample input
+input_ids = ndl.Tensor(
+    np.random.randint(0, 10000, (4, 64)),
+    device=device
+)
+
+# Forward pass
+logits, _ = model(input_ids)
+print(f"Forward pass successful!")
+print(f"Output shape: {logits.shape}")
+```
+
+### Test 4: Training Script
+
 ```bash
-cd <needle_root>
-python apps/train_pythia.py --epochs 5 --batch_size 16 --seq_len 128
+# Quick test with synthetic data
+python apps/train_pythia.py \
+    --dataset synthetic \
+    --epochs 1 \
+    --batch_size 4 \
+    --seq_len 64 \
+    --max_tokens 10000
 ```
 
-#### Train Sparse Model
+## Step 5: Running Experiments
+
+### Experiment 1: Dense vs Sparse Comparison
+
 ```bash
-python apps/train_pythia.py --epochs 5 --batch_size 16 --seq_len 128 --sparse
+# Train dense model
+python apps/train_pythia.py \
+    --dataset wikitext-2 \
+    --epochs 10 \
+    --batch_size 32 \
+    --seq_len 128 \
+    --checkpoint_dir ./checkpoints/dense
+
+# Train sparse model
+python apps/train_pythia.py \
+    --dataset wikitext-2 \
+    --epochs 10 \
+    --batch_size 32 \
+    --seq_len 128 \
+    --sparse \
+    --checkpoint_dir ./checkpoints/sparse
 ```
 
-#### Run Benchmarks
+### Experiment 2: Performance Benchmarking
+
 ```bash
 python apps/benchmark.py
 ```
 
-#### Run Demo Notebook
+### Experiment 3: Interactive Exploration
+
 ```bash
 jupyter notebook demo_notebook.ipynb
 ```
 
-## File Structure After Integration
+## Common Issues and Solutions
 
-```
-needle/
-├── apps/
-│   ├── pythia_model.py          # NEW: Pythia-70M implementation
-│   ├── train_pythia.py          # NEW: Training script
-│   ├── benchmark.py             # NEW: Benchmark script
-│   ├── models.py                # Existing
-│   └── simple_ml.py            # Existing
-├── python/
-│   └── needle/
-│       ├── nn/
-│       │   ├── nn_basic.py           # Existing
-│       │   ├── nn_conv.py            # Existing
-│       │   ├── nn_sequence.py        # Existing
-│       │   ├── nn_transformer.py     # Existing
-│       │   └── nn_sparse_attention.py # NEW: Sparse attention
-│       └── ...
-├── demo_notebook.ipynb          # NEW: Demo notebook
-├── PYTHIA_README.md            # NEW: Project documentation
-└── README.md                    # Existing
-```
+### Issue 1: CUDA Build Fails
 
-## Dependencies
+**Solution**: Ensure CUDA toolkit is installed and cmake can find it:
 
-The implementation uses only standard Needle components:
-- `needle.nn` - Neural network modules
-- `needle.ops` - Operations
-- `needle.init` - Initialization functions
-- `needle.optim` - Optimizers
-
-No additional external dependencies required beyond what Needle already uses.
-
-## Expected Outputs
-
-After running the demo notebook, you should see:
-
-1. **Model Creation**: Successfully creates Pythia-70M with ~70M parameters
-2. **Sparse Patterns**: Visualization of local, global, and mixed attention patterns
-3. **Performance**: 2-4x speedup on forward pass (CPU), higher on GPU
-4. **Training**: Similar convergence for dense and sparse models
-5. **Benchmarks**: Detailed performance comparison across sequence lengths
-
-## Troubleshooting
-
-### Import Errors
-
-If you see `ModuleNotFoundError: No module named 'needle'`:
 ```bash
-export PYTHONPATH=$PYTHONPATH:<needle_root>/python
-```
-
-### Build Errors
-
-If `make` fails:
-```bash
-# Install build dependencies
-sudo apt-get install build-essential python3-dev
-
-# Rebuild
+export CUDA_HOME=/usr/local/cuda
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 make clean
 make
 ```
 
-### CUDA Errors
+### Issue 2: HuggingFace Datasets Not Found
 
-If CUDA is not available:
-- The code will automatically fall back to CPU
-- Use `--device cpu` flag explicitly in training scripts
+**Solution**: Install datasets or use synthetic data:
 
-### Memory Issues
+```bash
+pip install datasets
+# Or use synthetic data:
+python apps/train_pythia.py --dataset synthetic
+```
 
-If you run out of memory:
-- Reduce batch size: `--batch_size 8`
-- Reduce sequence length: `--seq_len 64`
-- Use sparse attention: `--sparse`
+### Issue 3: Out of Memory
 
-## Performance Tips
+**Solution**: Reduce batch size or sequence length:
 
-### For Faster Training
+```bash
+python apps/train_pythia.py \
+    --batch_size 16 \
+    --seq_len 64
+```
 
-1. Use GPU if available:
-   ```bash
-   python apps/train_pythia.py --device cuda --sparse
-   ```
+### Issue 4: Import Errors
 
-2. Increase batch size (if memory allows):
-   ```bash
-   python apps/train_pythia.py --batch_size 64
-   ```
+**Solution**: Ensure paths are correct:
 
-3. Use sparse attention:
-   ```bash
-   python apps/train_pythia.py --sparse
-   ```
+```python
+import sys
+sys.path.append('./python')
+sys.path.append('./apps')
+```
 
-### For Better Quality
+## Configuration Options
 
-1. Train longer:
-   ```bash
-   python apps/train_pythia.py --epochs 20
-   ```
+### Model Configuration
 
-2. Use learning rate scheduling (can be added to train_pythia.py)
+Edit `pythia_model.py` to adjust:
 
-3. Increase model size (modify config in pythia_model.py)
+- `vocab_size`: Size of vocabulary
+- `d_model`: Hidden dimension (512 for Pythia-70M)
+- `num_heads`: Number of attention heads (8 for Pythia-70M)
+- `num_layers`: Number of transformer layers (6 for Pythia-70M)
+- `d_ff`: FFN dimension (2048 for Pythia-70M)
+- `max_seq_len`: Maximum sequence length
+- `dropout`: Dropout rate
+- `sparse_block_size`: Block size for sparse attention (64)
+- `sparse_pattern`: Pattern type ("local", "global", "mixed")
 
-## Next Steps
+### Training Configuration
 
-### Extend the Implementation
+Pass via command line:
 
-1. **Add More Sparse Patterns**:
-   - Edit `nn_sparse_attention.py`
-   - Implement BigBird pattern, Reformer pattern, etc.
+```bash
+python apps/train_pythia.py \
+    --epochs 20 \
+    --batch_size 64 \
+    --seq_len 256 \
+    --lr 5e-4 \
+    --sparse \
+    --device cuda
+```
 
-2. **CUDA Optimization**:
-   - Create `src/ndarray_backend_cuda_sparse.cu`
-   - Implement efficient sparse matrix operations
+## Performance Tuning
 
-3. **Larger Models**:
-   - Modify `pythia_model.py` PythiaConfig
-   - Create Pythia-410M, Pythia-1B configurations
+### CPU Optimization
 
-4. **Better Datasets**:
-   - Integrate HuggingFace datasets
-   - Add WikiText-2, TinyStories loaders
+- Use larger batch sizes (32-64)
+- Reduce sequence length for memory efficiency
+- Enable sparse attention for speedup
 
-## Contact & Support
+### CUDA Optimization
 
-For questions or issues:
-1. Check the main README.md
-2. Review demo_notebook.ipynb for examples
-3. Examine the code comments for implementation details
+- Increase batch size (64-128)
+- Use longer sequences (256-512)
+- Sparse attention provides best speedup on GPU
+
+### Memory Optimization
+
+- Reduce `d_model` or `num_layers` for smaller model
+- Use gradient accumulation for large batch sizes
+- Enable sparse attention to reduce memory footprint
 
 ## Validation Checklist
 
-- [ ] Files copied to correct locations
-- [ ] Needle backend built successfully (`make`)
-- [ ] Import test passes
-- [ ] Dense model trains without errors
-- [ ] Sparse model trains without errors
-- [ ] Benchmark script runs successfully
-- [ ] Demo notebook executes all cells
-- [ ] Speedup observed (sparse vs dense)
+- [ ] All files copied to correct locations
+- [ ] Project builds successfully (`make`)
+- [ ] Imports work without errors
+- [ ] Dense model forward pass succeeds
+- [ ] Sparse model forward pass succeeds
+- [ ] Training script runs (even on synthetic data)
+- [ ] Benchmark script produces results
+- [ ] Checkpoint save/load works
+- [ ] (Optional) HuggingFace datasets load correctly
+- [ ] (Optional) CUDA backend works
 
-If all items are checked, your integration is successful! ✓
+## Next Steps
+
+1. **Explore the demo notebook**: `jupyter notebook demo_notebook.ipynb`
+2. **Run benchmarks**: `python apps/benchmark.py`
+3. **Train your first model**: `python apps/train_pythia.py`
+4. **Experiment with sparse patterns**: Modify `sparse_pattern` in config
+5. **Scale up**: Try larger models or longer sequences
+
+## Support
+
+For issues or questions:
+
+1. Check the README.md for usage examples
+2. Review code comments in source files
+3. Examine demo_notebook.ipynb for interactive examples
+4. Verify your environment meets prerequisites
+
+## Advanced: Custom Sparse Patterns
+
+To implement custom sparse patterns:
+
+1. Edit `python/needle/nn/nn_sparse_attention.py`
+2. Add new pattern method to `BlockSparsePattern` class
+3. Update `create_block_mask()` to support new pattern
+4. Example:
+
+```python
+@staticmethod
+def custom_pattern(seq_len: int, block_size: int, param: int):
+    n_blocks = (seq_len + block_size - 1) // block_size
+    mask = np.zeros((n_blocks, n_blocks), dtype=bool)
+    
+    # Your custom logic here
+    for i in range(n_blocks):
+        mask[i, i] = True  # Always attend to self
+        # Add your pattern logic
+    
+    return mask
+```
+
+## Debugging Tips
+
+### Enable Verbose Logging
+
+Add to training script:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+### Check Tensor Shapes
+
+Add print statements:
+
+```python
+print(f"Input shape: {input_ids.shape}")
+print(f"Output shape: {logits.shape}")
+```
+
+### Verify Gradient Flow
+
+```python
+for param in model.parameters():
+    if param.grad is not None:
+        print(f"Grad norm: {np.linalg.norm(param.grad.numpy())}")
+```
+
+## Conclusion
+
+You should now have a fully integrated Pythia-70M implementation with block-sparse attention in your Needle repository. Start with the quick_start.py demo, then explore training and benchmarking!
