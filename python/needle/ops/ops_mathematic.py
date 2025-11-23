@@ -749,3 +749,45 @@ class Conv(TensorOp):
 
 def conv(a, b, stride=1, padding=1):
     return Conv(stride, padding)(a, b)
+
+
+class BlockSparseAttention(TensorOp):
+    def __init__(self, sparse_blocks: List[int], block_size: int):
+        self.sparse_blocks = sparse_blocks
+        self.block_size = block_size
+
+    def compute(self, q: NDArray, k: NDArray, v: NDArray) -> NDArray:
+        # q, k, v are (batch, heads, seq_len, head_dim)
+        # Output is same shape
+        batch_size, num_heads, seq_len, head_dim = q.shape
+        
+        # Create output array
+        out = array_api.empty(q.shape, dtype=q.dtype, device=q.device)
+        
+        # Call backend
+        # Note: sparse_blocks is a list of ints
+        q.device.block_sparse_attention(
+            q.compact()._handle,
+            k.compact()._handle,
+            v.compact()._handle,
+            out._handle,
+            self.sparse_blocks,
+            batch_size,
+            num_heads,
+            seq_len,
+            head_dim
+        )
+        
+        return out
+
+    def gradient(self, out_grad, node):
+        # Gradient not implemented for sparse attention yet
+        # Returning zeros or raising error? 
+        # For now, let's just return None or zeros to avoid crashing if called, 
+        # but ideally this should be implemented.
+        # Given the task scope, we might not need backward.
+        raise NotImplementedError("Gradient for BlockSparseAttention not implemented")
+
+
+def block_sparse_attention(q, k, v, sparse_blocks, block_size):
+    return BlockSparseAttention(sparse_blocks, block_size)(q, k, v)

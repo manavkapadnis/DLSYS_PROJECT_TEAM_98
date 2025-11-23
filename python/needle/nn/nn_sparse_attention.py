@@ -155,6 +155,36 @@ class BlockSparseMultiHeadAttention(Module):
         full_mask = (1.0 - full_mask) * (-1e10)
         
         return ndarray.array(full_mask, device=device)
+
+    def create_csr_metadata(self, seq_len: int):
+        """Create block-sparse attention mask in CSR format for kernels"""
+        if self.sparse_pattern == "local":
+            block_mask = BlockSparsePattern.local_pattern(seq_len, self.block_size, window_size=1)
+        elif self.sparse_pattern == "global":
+            block_mask = BlockSparsePattern.global_pattern(seq_len, self.block_size, stride=2)
+        elif self.sparse_pattern == "mixed":
+            block_mask = BlockSparsePattern.mixed_pattern(seq_len, self.block_size, window_size=1, stride=4)
+        else:
+            raise ValueError(f"Unknown sparse pattern: {self.sparse_pattern}")
+            
+        n_blocks = block_mask.shape[0]
+        
+        # CSR format
+        offsets = [0]
+        indices = []
+        
+        for i in range(n_blocks):
+            # active blocks for row i
+            active = np.where(block_mask[i])[0]
+            indices.extend(active.tolist())
+            offsets.append(len(indices))
+            
+        num_active = len(indices)
+        
+        # [num_rows, num_active, ...offsets..., ...indices...]
+        # Note: offsets has size n_blocks + 1
+        metadata = [n_blocks, num_active] + offsets + indices
+        return metadata
     
     def matmul(self, a, b_transpose):
         """Batched matrix multiplication"""
@@ -209,6 +239,16 @@ class BlockSparseMultiHeadAttention(Module):
         """
         batch_size, num_head, seq_len, q_dim = q.shape
         
+        # Check if we can use optimized kernel
+        if self.device and self.device.name in ["cuda", "cpu"]:
+            try:
+                metadata = self.create_csr_metadata(seq_len)
+                result = ops.block_sparse_attention(q, k, v, metadata, self.block_size)
+                return result, None
+            except Exception as e:
+                print(f"Falling back to slow implementation: {e}")
+                pass
+
         # Compute attention scores
         scores = self.matmul(q, k)
         scores = scores / (q_dim ** 0.5)
