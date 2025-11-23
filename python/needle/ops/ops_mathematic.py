@@ -749,3 +749,47 @@ class Conv(TensorOp):
 
 def conv(a, b, stride=1, padding=1):
     return Conv(stride, padding)(a, b)
+
+
+class EmbeddingLookup(TensorOp):
+    def __init__(self, embedding_dim):
+        self.embedding_dim = embedding_dim
+
+    def compute(self, weight, indices):
+        # indices are float32 but contain integer ids
+        num_indices = 1
+        for dim in indices.shape:
+            num_indices *= dim
+        out = weight.device.empty((num_indices, self.embedding_dim))
+        # Use backend handles so pybind signatures match CudaArray/Numpy Array
+        weight.device.embedding_lookup(weight._handle, indices._handle, out._handle,
+                                       int(self.embedding_dim))
+        return out
+
+    def gradient(self, out_grad, node):
+        weight, indices = node.inputs
+        grad_weight = embedding_add(out_grad, indices, weight.shape[0], self.embedding_dim)
+        return grad_weight, None
+
+
+class EmbeddingAdd(TensorOp):
+    def __init__(self, num_embeddings, embedding_dim):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+
+    def compute(self, grad_out, indices):
+        grad_weight = grad_out.device.full((self.num_embeddings, self.embedding_dim), 0.0)
+        grad_out.device.embedding_add(grad_out._handle, indices._handle, grad_weight._handle,
+                                      int(self.embedding_dim))
+        return grad_weight
+
+    def gradient(self, out_grad, node):
+        return None, None
+
+
+def embedding_lookup(weight, indices, embedding_dim):
+    return EmbeddingLookup(embedding_dim)(weight, indices)
+
+
+def embedding_add(grad_out, indices, num_embeddings, embedding_dim):
+    return EmbeddingAdd(num_embeddings, embedding_dim)(grad_out, indices)
