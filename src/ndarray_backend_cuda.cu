@@ -313,55 +313,6 @@ void EwiseTanh(const CudaArray& a, CudaArray* out) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Embedding lookup and gradient scatter
-////////////////////////////////////////////////////////////////////////////////
-
-__global__ void EmbeddingLookupKernel(const scalar_t* weight, const scalar_t* indices,
-                                      scalar_t* out, size_t num_indices,
-                                      size_t embedding_dim) {
-  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t total = num_indices * embedding_dim;
-  if (gid < total) {
-    size_t row = gid / embedding_dim;
-    size_t col = gid - row * embedding_dim;
-    int idx = static_cast<int>(indices[row]);
-    out[gid] = weight[idx * embedding_dim + col];
-  }
-}
-
-void EmbeddingLookup(const CudaArray& weight, const CudaArray& indices, CudaArray* out,
-                     size_t embedding_dim) {
-  size_t num_indices = indices.size;
-  size_t total = num_indices * embedding_dim;
-  CudaDims dim = CudaOneDim(total);
-  EmbeddingLookupKernel<<<dim.grid, dim.block>>>(weight.ptr, indices.ptr, out->ptr,
-                                                num_indices, embedding_dim);
-}
-
-__global__ void EmbeddingAddKernel(const scalar_t* grad_out, const scalar_t* indices,
-                                   scalar_t* grad_weight, size_t num_indices,
-                                   size_t embedding_dim) {
-  size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t total = num_indices * embedding_dim;
-  if (gid < total) {
-    size_t row = gid / embedding_dim;
-    size_t col = gid - row * embedding_dim;
-    int idx = static_cast<int>(indices[row]);
-    atomicAdd(&grad_weight[idx * embedding_dim + col], grad_out[gid]);
-  }
-}
-
-void EmbeddingAdd(const CudaArray& grad_out, const CudaArray& indices, CudaArray* grad_weight,
-                  size_t embedding_dim) {
-  cudaMemset(grad_weight->ptr, 0, grad_weight->size * ELEM_SIZE);
-  size_t num_indices = indices.size;
-  size_t total = num_indices * embedding_dim;
-  CudaDims dim = CudaOneDim(total);
-  EmbeddingAddKernel<<<dim.grid, dim.block>>>(grad_out.ptr, indices.ptr, grad_weight->ptr,
-                                              num_indices, embedding_dim);
-}
-
-////////////////////////////////////////////////////////////////////////////////
 // OPTIMIZED Matrix Multiplication with Shared Memory Tiling
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -519,8 +470,6 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
   m.def("ewise_log", EwiseLog);
   m.def("ewise_exp", EwiseExp);
   m.def("ewise_tanh", EwiseTanh);
-  m.def("embedding_lookup", EmbeddingLookup);
-  m.def("embedding_add", EmbeddingAdd);
 
   m.def("matmul", Matmul);
 
