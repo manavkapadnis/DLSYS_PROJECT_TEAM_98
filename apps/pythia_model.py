@@ -7,6 +7,7 @@ sys.path.append('./python')
 import needle as ndl
 import needle.nn as nn
 import numpy as np
+from needle import ops 
 
 
 class PythiaConfig:
@@ -93,7 +94,7 @@ class PythiaLM(nn.Module):
         
         # Transformer layers
         if config.use_sparse_attention:
-            from python.needle.nn.nn_sparse_attention import SparseTransformerLayer
+            from needle.nn.nn_sparse_attention import SparseTransformerLayer
             self.layers = [
                 SparseTransformerLayer(
                     q_features=config.d_model,
@@ -214,40 +215,83 @@ class PythiaLM(nn.Module):
             # Get predictions
             logits, _ = self.forward(input_ids)
             
-            # Get logits for last token
-            logits_last = logits[:, -1, :]  # (batch_size, vocab_size)
+            # Get logits for last token using proper slicing
+            batch_size = logits.shape[0]
+            seq_len = logits.shape[1]
+            vocab_size = logits.shape[2]
+            
+            # Extract last token: reshape and slice
+            # logits shape: (batch_size, seq_len, vocab_size)
+            # We want: (batch_size, vocab_size)
+            logits_flat = logits.reshape((batch_size * seq_len, vocab_size))
+            
+            # Get indices for last token of each sequence
+            last_indices = []
+            for b in range(batch_size):
+                last_indices.append((b + 1) * seq_len - 1)
+            
+            # Extract logits for last tokens
+            logits_last_np = logits_flat.numpy()
+            logits_last_list = [logits_last_np[idx] for idx in last_indices]
+            logits_last = ndl.Tensor(
+                np.array(logits_last_list), 
+                device=self.config.device
+            )
             
             # Apply temperature
-            logits_last = logits_last / temperature
+            if temperature != 1.0:
+                logits_last = logits_last * (1.0 / temperature)
             
-            # Apply top-k filtering
+            # Apply top-k filtering if specified
             if top_k is not None:
                 logits_np = logits_last.numpy()
-                top_k_indices = np.argsort(logits_np, axis=-1)[:, -top_k:]
-                mask = np.zeros_like(logits_np)
                 for i in range(logits_np.shape[0]):
-                    mask[i, top_k_indices[i]] = 1
-                logits_np = logits_np * mask + (1 - mask) * (-1e10)
+                    # Get top-k indices
+                    top_k_indices = np.argsort(logits_np[i])[-top_k:]
+                    # Mask out non-top-k
+                    mask = np.full_like(logits_np[i], -1e10)
+                    mask[top_k_indices] = 0
+                    logits_np[i] = logits_np[i] + mask
                 logits_last = ndl.Tensor(logits_np, device=self.config.device)
             
-            # Sample from distribution
-            probs = ndl.ops.exp(logits_last)
-            probs_sum = ndl.ops.summation(probs, axes=(1,))
-            probs_sum = probs_sum.reshape((probs.shape[0], 1))
-            probs = probs / ndl.ops.broadcast_to(probs_sum, probs.shape)
+            # Compute softmax probabilities
+            # Use stable softmax: subtract max for numerical stability
+            max_logits = ndl.Tensor(
+                np.max(logits_last.numpy(), axis=1, keepdims=True),
+                device=self.config.device
+            )
+            logits_shifted = logits_last - ops.broadcast_to(
+                max_logits, 
+                logits_last.shape
+            )
             
-            # Sample next token (using numpy for simplicity)
+            probs = ops.exp(logits_shifted)
+            probs_sum = ops.summation(probs, axes=(1,))
+            probs_sum = probs_sum.reshape((batch_size, 1))
+            probs = probs / ops.broadcast_to(probs_sum, probs.shape)
+            
+            # Sample next token
             probs_np = probs.numpy()
             next_tokens = []
-            for i in range(probs_np.shape[0]):
-                next_token = np.random.choice(self.config.vocab_size, p=probs_np[i])
+            for i in range(batch_size):
+                # Normalize to ensure valid probability distribution
+                p = probs_np[i]
+                p = p / p.sum()  # Renormalize
+                next_token = np.random.choice(self.config.vocab_size, p=p)
                 next_tokens.append(next_token)
             
             next_tokens = np.array(next_tokens).reshape(-1, 1)
-            next_tokens_tensor = ndl.Tensor(next_tokens, device=self.config.device)
+            next_tokens_tensor = ndl.Tensor(
+                next_tokens, 
+                device=self.config.device
+            )
             
-            # Append to sequence
-            input_ids = ndl.ops.concat([input_ids, next_tokens_tensor], axis=1)
+            # Concatenate to sequence
+            # Use proper concatenation
+            input_np = input_ids.numpy()
+            next_np = next_tokens_tensor.numpy()
+            new_input = np.concatenate([input_np, next_np], axis=1)
+            input_ids = ndl.Tensor(new_input, device=self.config.device)
         
         return input_ids
 
