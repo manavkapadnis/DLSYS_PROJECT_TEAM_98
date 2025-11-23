@@ -1,6 +1,7 @@
 """
 Training script for Pythia-70M with HuggingFace Datasets Support
 Supports WikiText-2 and TinyStories datasets
+FIXED: Vocabulary size capping and memory optimizations
 """
 import sys
 sys.path.append('./python')
@@ -12,18 +13,20 @@ from pythia_model import create_pythia_70m, PythiaConfig
 import argparse
 import os
 import pickle
+from collections import Counter
 
 
-def load_dataset_huggingface(dataset_name, max_tokens=None):
+def load_dataset_huggingface(dataset_name, max_tokens=None, vocab_size=10000):
     """
-    Load dataset from HuggingFace
+    Load dataset from HuggingFace with FIXED vocabulary size
     
     Args:
         dataset_name: "wikitext-2" or "tinystories"
         max_tokens: maximum number of tokens to use
+        vocab_size: MAXIMUM vocabulary size (default 10000)
         
     Returns:
-        train_data, val_data, vocab_size
+        train_data, val_data, actual_vocab_size
     """
     try:
         from datasets import load_dataset
@@ -31,42 +34,54 @@ def load_dataset_huggingface(dataset_name, max_tokens=None):
         print("ERROR: HuggingFace datasets library not installed!")
         print("Install with: pip install datasets")
         print("Falling back to synthetic data...")
-        return load_synthetic_data(max_tokens or 100000)
+        return load_synthetic_data(max_tokens or 100000, vocab_size)
     
     print(f"Loading {dataset_name} from HuggingFace...")
     
     if dataset_name == "wikitext-2":
-        # Load WikiText-2
         dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
         train_text = " ".join(dataset["train"]["text"])
         val_text = " ".join(dataset["validation"]["text"])
         
     elif dataset_name == "tinystories":
-        # Load TinyStories
         dataset = load_dataset("roneneldan/TinyStories")
-        train_text = " ".join([item["text"] for item in dataset["train"][:10000]])  # Limit for memory
+        train_text = " ".join([item["text"] for item in dataset["train"][:10000]])
         val_text = " ".join([item["text"] for item in dataset["validation"][:1000]])
         
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
-    # Simple tokenization (word-level)
     print("Tokenizing...")
     train_tokens = train_text.lower().split()
     val_tokens = val_text.lower().split()
     
+    # FIXED: Build vocabulary with size limit using most frequent tokens
+    print(f"Building vocabulary (max size: {vocab_size})...")
+    
+    # Count token frequencies
+    token_counts = Counter(train_tokens)
+    
+    # Reserve space for special tokens
+    special_tokens = ["<pad>", "<unk>", "<sos>", "<eos>"]
+    max_vocab_tokens = vocab_size - len(special_tokens)
+    
+    # Get most frequent tokens
+    most_common = token_counts.most_common(max_vocab_tokens)
+    
     # Build vocabulary
-    vocab = {"<pad>": 0, "<unk>": 1, "<sos>": 2, "<eos>": 3}
-    for token in train_tokens:
+    vocab = {token: idx for idx, token in enumerate(special_tokens)}
+    for token, _ in most_common:
         if token not in vocab:
             vocab[token] = len(vocab)
     
-    vocab_size = len(vocab)
-    print(f"Vocabulary size: {vocab_size}")
+    actual_vocab_size = len(vocab)
+    print(f"Actual vocabulary size: {actual_vocab_size}")
+    print(f"Coverage: {sum(count for token, count in most_common) / len(train_tokens) * 100:.2f}%")
     
-    # Convert to indices
-    train_data = np.array([vocab.get(token, vocab["<unk>"]) for token in train_tokens])
-    val_data = np.array([vocab.get(token, vocab["<unk>"]) for token in val_tokens])
+    # Convert to indices with UNK for out-of-vocab tokens
+    unk_idx = vocab["<unk>"]
+    train_data = np.array([vocab.get(token, unk_idx) for token in train_tokens])
+    val_data = np.array([vocab.get(token, unk_idx) for token in val_tokens])
     
     # Limit tokens if specified
     if max_tokens:
@@ -76,15 +91,14 @@ def load_dataset_huggingface(dataset_name, max_tokens=None):
     print(f"Train tokens: {len(train_data)}")
     print(f"Validation tokens: {len(val_data)}")
     
-    return train_data, val_data, vocab_size
+    return train_data, val_data, actual_vocab_size
 
 
-def load_synthetic_data(max_tokens=100000):
+def load_synthetic_data(max_tokens=100000, vocab_size=10000):
     """
     Fallback: Create synthetic data
     """
     print("Using synthetic data...")
-    vocab_size = 10000
     data = np.random.randint(0, vocab_size, size=max_tokens)
     
     split_idx = int(0.9 * len(data))
@@ -94,38 +108,37 @@ def load_synthetic_data(max_tokens=100000):
     return train_data, val_data, vocab_size
 
 
-def batchify(data, batch_size, seq_len, device):
+def batchify_streaming(data, batch_size, seq_len):
     """
-    Arrange data into batches
+    OPTIMIZED: Create batches on-the-fly instead of pre-allocating
     
     Returns:
-        batches: array of shape (n_batches, batch_size, seq_len)
+        generator of batches
     """
-    # Calculate number of complete sequences
-    n_sequences = len(data) // (seq_len + 1)  # +1 for targets
+    n_sequences = len(data) // (seq_len + 1)
     n_batches = n_sequences // batch_size
     
-    # Trim data
-    total_len = n_batches * batch_size * (seq_len + 1)
-    data = data[:total_len]
-    
-    # Reshape
-    data = data.reshape((n_batches, batch_size, seq_len + 1))
-    
-    return data
+    for batch_idx in range(n_batches):
+        batch_data = []
+        for seq_idx in range(batch_size):
+            idx = (batch_idx * batch_size + seq_idx) * (seq_len + 1)
+            if idx + seq_len + 1 <= len(data):
+                batch_data.append(data[idx:idx + seq_len + 1])
+        
+        if len(batch_data) == batch_size:
+            yield np.array(batch_data)
 
 
-def get_batch(batches, idx, device):
+def get_batch(batch_data, device):
     """
-    Get a single batch
+    Get a single batch from pre-fetched data
     
     Returns:
         inputs: (batch_size, seq_len)
         targets: (batch_size, seq_len)
     """
-    batch = batches[idx]
-    inputs = batch[:, :-1]
-    targets = batch[:, 1:]
+    inputs = batch_data[:, :-1]
+    targets = batch_data[:, 1:]
     
     inputs_tensor = ndl.Tensor(inputs, device=device, dtype="float32")
     targets_tensor = ndl.Tensor(targets, device=device, dtype="float32")
@@ -133,9 +146,9 @@ def get_batch(batches, idx, device):
     return inputs_tensor, targets_tensor
 
 
-def train_epoch(model, batches, optimizer, device, clip_grad=1.0):
+def train_epoch(model, train_data, batch_size, seq_len, optimizer, device, clip_grad=1.0):
     """
-    Train for one epoch
+    Train for one epoch with streaming batches
     
     Returns:
         avg_loss: average loss over epoch
@@ -146,12 +159,11 @@ def train_epoch(model, batches, optimizer, device, clip_grad=1.0):
     total_tokens = 0
     start_time = time.time()
     
-    n_batches = len(batches)
+    batch_count = 0
     
-    for i in range(n_batches):
+    for batch_data in batchify_streaming(train_data, batch_size, seq_len):
         # Get batch
-        inputs, targets = get_batch(batches, i, device)
-        batch_size, seq_len = inputs.shape
+        inputs, targets = get_batch(batch_data, device)
         
         # Forward pass
         optimizer.reset_grad()
@@ -160,7 +172,7 @@ def train_epoch(model, batches, optimizer, device, clip_grad=1.0):
         # Backward pass
         loss.backward()
         
-        # Gradient clipping (optional)
+        # Gradient clipping
         if clip_grad > 0:
             for param in model.parameters():
                 if param.grad is not None:
@@ -179,27 +191,30 @@ def train_epoch(model, batches, optimizer, device, clip_grad=1.0):
         loss_val = loss.numpy()
         if isinstance(loss_val, np.ndarray):
             loss_val = loss_val.item()
-        total_loss += loss_val * batch_size * seq_len
-        total_tokens += batch_size * seq_len
+        
+        batch_tokens = batch_size * seq_len
+        total_loss += loss_val * batch_tokens
+        total_tokens += batch_tokens
+        batch_count += 1
         
         # Print progress
-        if (i + 1) % 10 == 0:
+        if batch_count % 10 == 0:
             elapsed = time.time() - start_time
             tokens_per_sec = total_tokens / elapsed
-            print(f"  Batch {i+1}/{n_batches} | "
+            print(f"  Batch {batch_count} | "
                   f"Loss: {loss_val:.4f} | "
                   f"Tokens/sec: {tokens_per_sec:.0f}")
     
     elapsed = time.time() - start_time
-    avg_loss = total_loss / total_tokens
-    tokens_per_sec = total_tokens / elapsed
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
+    tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
     
     return avg_loss, tokens_per_sec
 
 
-def evaluate(model, batches, device):
+def evaluate(model, val_data, batch_size, seq_len, device, max_batches=50):
     """
-    Evaluate model
+    Evaluate model with streaming batches
     
     Returns:
         avg_loss: average loss
@@ -208,12 +223,13 @@ def evaluate(model, batches, device):
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    batch_count = 0
     
-    n_batches = min(len(batches), 50)  # Evaluate on subset
-    
-    for i in range(n_batches):
-        inputs, targets = get_batch(batches, i, device)
-        batch_size, seq_len = inputs.shape
+    for batch_data in batchify_streaming(val_data, batch_size, seq_len):
+        if batch_count >= max_batches:
+            break
+        
+        inputs, targets = get_batch(batch_data, device)
         
         # Forward pass (no gradients)
         logits, loss = model(inputs, targets)
@@ -222,26 +238,20 @@ def evaluate(model, batches, device):
         loss_val = loss.numpy()
         if isinstance(loss_val, np.ndarray):
             loss_val = loss_val.item()
-        total_loss += loss_val * batch_size * seq_len
-        total_tokens += batch_size * seq_len
+        
+        batch_tokens = batch_size * seq_len
+        total_loss += loss_val * batch_tokens
+        total_tokens += batch_tokens
+        batch_count += 1
     
-    avg_loss = total_loss / total_tokens
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
     perplexity = np.exp(avg_loss)
     
     return avg_loss, perplexity
 
 
 def save_checkpoint(model, optimizer, epoch, loss, filepath):
-    """
-    Save model checkpoint
-    
-    Args:
-        model: PythiaLM model
-        optimizer: optimizer
-        epoch: current epoch
-        loss: current loss
-        filepath: path to save checkpoint
-    """
+    """Save model checkpoint"""
     print(f"Saving checkpoint to {filepath}...")
     
     checkpoint = {
@@ -283,7 +293,6 @@ def save_checkpoint(model, optimizer, epoch, loss, filepath):
             if param in optimizer.v
         }
     
-    # Save to file
     with open(filepath, 'wb') as f:
         pickle.dump(checkpoint, f)
     
@@ -291,16 +300,7 @@ def save_checkpoint(model, optimizer, epoch, loss, filepath):
 
 
 def load_checkpoint(filepath, device):
-    """
-    Load model from checkpoint
-    
-    Args:
-        filepath: path to checkpoint
-        device: device to load model on
-        
-    Returns:
-        model, optimizer, epoch, loss
-    """
+    """Load model from checkpoint"""
     print(f"Loading checkpoint from {filepath}...")
     
     with open(filepath, 'rb') as f:
@@ -364,9 +364,7 @@ def train(
     checkpoint_dir=None,
     eval_only=False
 ):
-    """
-    Main training loop
-    """
+    """Main training loop"""
     print("=" * 80)
     print("Training Configuration")
     print("=" * 80)
@@ -380,17 +378,9 @@ def train(
     print(f"Eval only: {eval_only}")
     print("=" * 80)
     
-    # Prepare batches
-    print("Preparing data...")
-    train_batches = batchify(train_data, batch_size, seq_len, device)
-    val_batches = batchify(val_data, batch_size, seq_len, device)
-    print(f"Train batches: {len(train_batches)}")
-    print(f"Val batches: {len(val_batches)}")
-    
     if eval_only:
-        # Evaluation only
         print("\nRunning evaluation...")
-        val_loss, val_ppl = evaluate(model, val_batches, device)
+        val_loss, val_ppl = evaluate(model, val_data, batch_size, seq_len, device)
         print(f"Validation Loss: {val_loss:.4f}")
         print(f"Validation Perplexity: {val_ppl:.2f}")
         return {'val_loss': val_loss, 'val_ppl': val_ppl}
@@ -409,11 +399,13 @@ def train(
         print(f"{'='*80}")
         
         # Train
-        train_loss, tokens_per_sec = train_epoch(model, train_batches, optimizer, device)
+        train_loss, tokens_per_sec = train_epoch(
+            model, train_data, batch_size, seq_len, optimizer, device
+        )
         train_losses.append(train_loss)
         
         # Evaluate
-        val_loss, val_ppl = evaluate(model, val_batches, device)
+        val_loss, val_ppl = evaluate(model, val_data, batch_size, seq_len, device)
         val_losses.append(val_loss)
         
         print(f"\n{'='*80}")
@@ -440,31 +432,28 @@ def train(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Pythia-70M with HuggingFace Datasets')
+    parser = argparse.ArgumentParser(description='Train Pythia-70M')
     
     # Training parameters
-    parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
-    parser.add_argument('--seq_len', type=int, default=128, help='Sequence length')
-    parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--seq_len', type=int, default=128)
+    parser.add_argument('--lr', type=float, default=3e-4)
     
     # Model parameters
-    parser.add_argument('--sparse', action='store_true', help='Use sparse attention')
-    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'], help='Device')
+    parser.add_argument('--sparse', action='store_true')
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'])
     
     # Dataset parameters
     parser.add_argument('--dataset', type=str, default='wikitext-2', 
-                       choices=['wikitext-2', 'tinystories', 'synthetic'],
-                       help='Dataset to use')
-    parser.add_argument('--max_tokens', type=int, default=1000000, help='Max tokens to use')
+                       choices=['wikitext-2', 'tinystories', 'synthetic'])
+    parser.add_argument('--max_tokens', type=int, default=1000000)
+    parser.add_argument('--vocab_size', type=int, default=10000)
     
     # Checkpoint parameters
-    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', 
-                       help='Directory to save checkpoints')
-    parser.add_argument('--load_checkpoint', type=str, default=None, 
-                       help='Path to checkpoint to load')
-    parser.add_argument('--eval_only', action='store_true', 
-                       help='Only run evaluation (requires --load_checkpoint)')
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
+    parser.add_argument('--load_checkpoint', type=str, default=None)
+    parser.add_argument('--eval_only', action='store_true')
     
     args = parser.parse_args()
     
@@ -472,6 +461,7 @@ def main():
     if args.device == 'cuda':
         try:
             device = ndl.cuda()
+            print("Using CUDA")
         except:
             print("CUDA not available, falling back to CPU")
             device = ndl.cpu()
@@ -481,16 +471,19 @@ def main():
     # Load data
     print(f"Loading {args.dataset} dataset...")
     if args.dataset == 'synthetic':
-        train_data, val_data, vocab_size = load_synthetic_data(args.max_tokens)
+        train_data, val_data, vocab_size = load_synthetic_data(
+            args.max_tokens, args.vocab_size
+        )
     else:
-        train_data, val_data, vocab_size = load_dataset_huggingface(args.dataset, args.max_tokens)
+        train_data, val_data, vocab_size = load_dataset_huggingface(
+            args.dataset, args.max_tokens, args.vocab_size
+        )
     
     # Load checkpoint or create new model
     if args.load_checkpoint:
         model, optimizer, start_epoch, _ = load_checkpoint(args.load_checkpoint, device)
         config = model.config
     else:
-        # Create model
         print("Creating model...")
         model, config = create_pythia_70m(
             vocab_size=vocab_size,
