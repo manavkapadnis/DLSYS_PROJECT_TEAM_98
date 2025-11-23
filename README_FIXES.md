@@ -23,6 +23,11 @@
 
 **Fix**: Implemented shared memory tiled matmul with 16×16 tiles.
 
+### 4. **Embedding Memory Leak**
+**Problem**: Embedding layer materialized full one-hot matrices each step, exhausting GPU memory.
+
+**Fix**: Added fused `embedding_lookup`/`embedding_add` ops backed by CUDA scatter kernels and wired `Embedding` to use them, removing one-hot creation entirely.
+
 ## Files to Replace
 
 1. **apps/train_pythia.py** → Use the fixed version

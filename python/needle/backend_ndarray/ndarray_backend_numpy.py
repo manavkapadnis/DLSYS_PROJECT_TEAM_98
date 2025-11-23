@@ -105,6 +105,20 @@ def ewise_tanh(a, out):
     out.array[:] = np.tanh(a.array)
 
 
+def embedding_lookup(weight, indices, out, embedding_dim):
+    flat_idx = indices.array.astype(np.int64).reshape(-1)
+    out.array[:] = weight.array[flat_idx].reshape(out.array.shape)
+
+
+def embedding_add(grad_out, indices, grad_weight, embedding_dim):
+    flat_idx = indices.array.astype(np.int64).reshape(-1)
+    grad_w = grad_weight.array
+    grad_w[:] = 0.0
+    go = grad_out.array.reshape((-1, embedding_dim))
+    for row, idx in enumerate(flat_idx):
+        grad_w[idx] += go[row]
+
+
 def matmul(a, b, out, m, n, p):
     out.array[:] = (a.array.reshape(m, n) @ b.array.reshape(n, p)).reshape(-1)
 
