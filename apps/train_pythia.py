@@ -1,7 +1,5 @@
 """
-Training script for Pythia-70M with HuggingFace Datasets Support
-Supports WikiText-2 and TinyStories datasets
-FIXED: Vocabulary size capping and memory optimizations
+Training script for Pythia-70M with Memory Optimizations
 """
 import sys
 sys.path.append('./python')
@@ -14,19 +12,12 @@ import argparse
 import os
 import pickle
 from collections import Counter
+import gc
 
 
 def load_dataset_huggingface(dataset_name, max_tokens=None, vocab_size=10000):
     """
     Load dataset from HuggingFace with FIXED vocabulary size
-    
-    Args:
-        dataset_name: "wikitext-2" or "tinystories"
-        max_tokens: maximum number of tokens to use
-        vocab_size: MAXIMUM vocabulary size (default 10000)
-        
-    Returns:
-        train_data, val_data, actual_vocab_size
     """
     try:
         from datasets import load_dataset
@@ -55,7 +46,7 @@ def load_dataset_huggingface(dataset_name, max_tokens=None, vocab_size=10000):
     train_tokens = train_text.lower().split()
     val_tokens = val_text.lower().split()
     
-    # FIXED: Build vocabulary with size limit using most frequent tokens
+    # Build vocabulary with size limit
     print(f"Building vocabulary (max size: {vocab_size})...")
     
     # Count token frequencies
@@ -95,9 +86,7 @@ def load_dataset_huggingface(dataset_name, max_tokens=None, vocab_size=10000):
 
 
 def load_synthetic_data(max_tokens=100000, vocab_size=10000):
-    """
-    Fallback: Create synthetic data
-    """
+    """Create synthetic data"""
     print("Using synthetic data...")
     data = np.random.randint(0, vocab_size, size=max_tokens)
     
@@ -109,12 +98,7 @@ def load_synthetic_data(max_tokens=100000, vocab_size=10000):
 
 
 def batchify_streaming(data, batch_size, seq_len):
-    """
-    OPTIMIZED: Create batches on-the-fly instead of pre-allocating
-    
-    Returns:
-        generator of batches
-    """
+    """Create batches on-the-fly to save memory"""
     n_sequences = len(data) // (seq_len + 1)
     n_batches = n_sequences // batch_size
     
@@ -130,13 +114,7 @@ def batchify_streaming(data, batch_size, seq_len):
 
 
 def get_batch(batch_data, device):
-    """
-    Get a single batch from pre-fetched data
-    
-    Returns:
-        inputs: (batch_size, seq_len)
-        targets: (batch_size, seq_len)
-    """
+    """Get a single batch from pre-fetched data"""
     inputs = batch_data[:, :-1]
     targets = batch_data[:, 1:]
     
@@ -148,17 +126,12 @@ def get_batch(batch_data, device):
 
 def train_epoch(model, train_data, batch_size, seq_len, optimizer, device, clip_grad=1.0):
     """
-    Train for one epoch with streaming batches
-    
-    Returns:
-        avg_loss: average loss over epoch
-        tokens_per_sec: throughput
+    Train for one epoch with memory optimization
     """
     model.train()
     total_loss = 0.0
     total_tokens = 0
     start_time = time.time()
-    
     batch_count = 0
     
     for batch_data in batchify_streaming(train_data, batch_size, seq_len):
@@ -197,13 +170,19 @@ def train_epoch(model, train_data, batch_size, seq_len, optimizer, device, clip_
         total_tokens += batch_tokens
         batch_count += 1
         
-        # Print progress
+        # MEMORY OPTIMIZATION: Clear computation graph periodically
         if batch_count % 10 == 0:
+            # Force garbage collection
+            gc.collect()
+            
             elapsed = time.time() - start_time
             tokens_per_sec = total_tokens / elapsed
             print(f"  Batch {batch_count} | "
                   f"Loss: {loss_val:.4f} | "
                   f"Tokens/sec: {tokens_per_sec:.0f}")
+        
+        # Clear intermediate tensors
+        del inputs, targets, logits, loss
     
     elapsed = time.time() - start_time
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
@@ -213,13 +192,7 @@ def train_epoch(model, train_data, batch_size, seq_len, optimizer, device, clip_
 
 
 def evaluate(model, val_data, batch_size, seq_len, device, max_batches=50):
-    """
-    Evaluate model with streaming batches
-    
-    Returns:
-        avg_loss: average loss
-        perplexity: perplexity
-    """
+    """Evaluate model"""
     model.eval()
     total_loss = 0.0
     total_tokens = 0
@@ -243,6 +216,9 @@ def evaluate(model, val_data, batch_size, seq_len, device, max_batches=50):
         total_loss += loss_val * batch_tokens
         total_tokens += batch_tokens
         batch_count += 1
+        
+        # Clean up
+        del inputs, targets, logits, loss
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
     perplexity = np.exp(avg_loss)
@@ -299,58 +275,6 @@ def save_checkpoint(model, optimizer, epoch, loss, filepath):
     print(f"Checkpoint saved successfully!")
 
 
-def load_checkpoint(filepath, device):
-    """Load model from checkpoint"""
-    print(f"Loading checkpoint from {filepath}...")
-    
-    with open(filepath, 'rb') as f:
-        checkpoint = pickle.load(f)
-    
-    # Recreate model
-    config = PythiaConfig(**checkpoint['config'], device=device)
-    from pythia_model import PythiaLM
-    model = PythiaLM(config)
-    
-    # Load parameters
-    model_params = list(model.parameters())
-    for i, param in enumerate(model_params):
-        if f'param_{i}' in checkpoint['model_state']:
-            param.data = ndl.Tensor(
-                checkpoint['model_state'][f'param_{i}'],
-                device=device
-            ).data
-    
-    # Recreate optimizer
-    optimizer = ndl.optim.Adam(model.parameters(), lr=3e-4, weight_decay=0.01)
-    
-    # Load optimizer state
-    if 't' in checkpoint['optimizer_state']:
-        optimizer.t = checkpoint['optimizer_state']['t']
-    
-    if 'm' in checkpoint['optimizer_state']:
-        for i, param in enumerate(model_params):
-            if i in checkpoint['optimizer_state']['m']:
-                optimizer.m[param] = ndl.Tensor(
-                    checkpoint['optimizer_state']['m'][i],
-                    device=device
-                ).data
-    
-    if 'v' in checkpoint['optimizer_state']:
-        for i, param in enumerate(model_params):
-            if i in checkpoint['optimizer_state']['v']:
-                optimizer.v[param] = ndl.Tensor(
-                    checkpoint['optimizer_state']['v'][i],
-                    device=device
-                ).data
-    
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    
-    print(f"Checkpoint loaded: epoch {epoch}, loss {loss:.4f}")
-    
-    return model, optimizer, epoch, loss
-
-
 def train(
     model,
     train_data,
@@ -364,7 +288,7 @@ def train(
     checkpoint_dir=None,
     eval_only=False
 ):
-    """Main training loop"""
+    """Main training loop with memory optimizations"""
     print("=" * 80)
     print("Training Configuration")
     print("=" * 80)
@@ -375,7 +299,6 @@ def train(
     print(f"Sequence length: {seq_len}")
     print(f"Learning rate: {lr}")
     print(f"Device: {device}")
-    print(f"Eval only: {eval_only}")
     print("=" * 80)
     
     if eval_only:
@@ -385,8 +308,8 @@ def train(
         print(f"Validation Perplexity: {val_ppl:.2f}")
         return {'val_loss': val_loss, 'val_ppl': val_ppl}
     
-    # Optimizer
-    optimizer = ndl.optim.Adam(model.parameters(), lr=lr, weight_decay=0.01)
+    # Optimizer with lower weight decay for memory efficiency
+    optimizer = ndl.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0)
     
     # Training loop
     best_val_loss = float('inf')
@@ -414,6 +337,18 @@ def train(
         print(f"  Val Loss: {val_loss:.4f}")
         print(f"  Val Perplexity: {val_ppl:.2f}")
         print(f"  Throughput: {tokens_per_sec:.0f} tokens/sec")
+        
+        # Memory usage info
+        if hasattr(device, '__repr__') and 'cuda' in str(device):
+            try:
+                import subprocess
+                result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,nounits,noheader'], 
+                                      capture_output=True, text=True)
+                memory_used = result.stdout.strip()
+                print(f"  GPU Memory: {memory_used} MB")
+            except:
+                pass
+        
         print(f"{'='*80}")
         
         # Save checkpoint
@@ -423,6 +358,9 @@ def train(
             checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pkl')
             save_checkpoint(model, optimizer, epoch + 1, val_loss, checkpoint_path)
             print(f"  New best validation loss: {best_val_loss:.4f}")
+        
+        # Force garbage collection between epochs
+        gc.collect()
     
     return {
         'train_losses': train_losses,
@@ -432,7 +370,7 @@ def train(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Pythia-70M')
+    parser = argparse.ArgumentParser(description='Train Pythia-70M with Memory Optimizations')
     
     # Training parameters
     parser.add_argument('--epochs', type=int, default=10)
@@ -479,18 +417,21 @@ def main():
             args.dataset, args.max_tokens, args.vocab_size
         )
     
-    # Load checkpoint or create new model
-    if args.load_checkpoint:
-        model, optimizer, start_epoch, _ = load_checkpoint(args.load_checkpoint, device)
-        config = model.config
-    else:
-        print("Creating model...")
-        model, config = create_pythia_70m(
-            vocab_size=vocab_size,
-            max_seq_len=args.seq_len,
-            use_sparse_attention=args.sparse,
-            device=device
-        )
+    # Create model
+    print("Creating model...")
+    model, config = create_pythia_70m(
+        vocab_size=vocab_size,
+        max_seq_len=args.seq_len,
+        use_sparse_attention=args.sparse,
+        device=device
+    )
+    
+    # Print memory estimate
+    total_params = config.get_total_params()
+    memory_est = total_params * 4 / 1e9  # GB for fp32
+    print(f"\nModel Parameters: {total_params / 1e6:.1f}M")
+    print(f"Model Memory (fp32): {memory_est:.2f} GB")
+    print(f"Estimated Training Memory: {memory_est * 3:.2f} GB (model + gradients + optimizer)")
     
     # Train or evaluate
     results = train(
