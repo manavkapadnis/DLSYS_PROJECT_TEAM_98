@@ -761,9 +761,6 @@ class EmbeddingLookup(TensorOp):
         for dim in indices.shape:
             num_indices *= dim
         out = weight.device.empty((num_indices, self.embedding_dim))
-        # Use backend handles so pybind signatures match CudaArray/Numpy Array
-        weight.device.embedding_lookup(weight._handle, indices._handle, out._handle,
-                                       int(self.embedding_dim))
         weight.device.embedding_lookup(weight, indices, out, self.embedding_dim)
         return out
 
@@ -780,8 +777,6 @@ class EmbeddingAdd(TensorOp):
 
     def compute(self, grad_out, indices):
         grad_weight = grad_out.device.full((self.num_embeddings, self.embedding_dim), 0.0)
-        grad_out.device.embedding_add(grad_out._handle, indices._handle, grad_weight._handle,
-                                      int(self.embedding_dim))
         grad_out.device.embedding_add(grad_out, indices, grad_weight, self.embedding_dim)
         return grad_weight
 
