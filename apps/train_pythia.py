@@ -275,68 +275,6 @@ def save_checkpoint(model, optimizer, epoch, loss, filepath):
     print(f"Checkpoint saved successfully!")
 
 
-def load_checkpoint(filepath, device=None):
-    """Load model checkpoint
-
-    Returns:
-        model: Loaded model
-        optimizer: Optimizer with restored state (or None)
-        epoch: Training epoch
-        loss: Training loss
-    """
-    print(f"Loading checkpoint from {filepath}...")
-
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Checkpoint not found: {filepath}")
-
-    with open(filepath, 'rb') as f:
-        checkpoint = pickle.load(f)
-
-    # Extract config and create model
-    config_dict = checkpoint['config']
-    config = PythiaConfig(
-        vocab_size=config_dict['vocab_size'],
-        d_model=config_dict['d_model'],
-        num_heads=config_dict['num_heads'],
-        num_layers=config_dict['num_layers'],
-        d_ff=config_dict['d_ff'],
-        max_seq_len=config_dict['max_seq_len'],
-        dropout=config_dict['dropout'],
-        use_sparse_attention=config_dict['use_sparse_attention'],
-        sparse_block_size=config_dict.get('sparse_block_size', 64),
-        sparse_pattern=config_dict.get('sparse_pattern', 'local'),
-        device=device,
-        dtype="float32"
-    )
-
-    from pythia_model import PythiaLM
-    model = PythiaLM(config)
-
-    # Load model parameters
-    model_params = list(model.parameters())
-    for i, param in enumerate(model_params):
-        if f'param_{i}' in checkpoint['model_state']:
-            param_data = checkpoint['model_state'][f'param_{i}']
-            # Convert numpy to tensor on correct device
-            param.data = ndl.Tensor(param_data, device=device if device else param.device)
-
-    # Load optimizer state if available
-    optimizer = None
-    if 'optimizer_state' in checkpoint and checkpoint['optimizer_state']:
-        # Create optimizer (user should provide learning rate)
-        optimizer_state = checkpoint['optimizer_state']
-        print(f"Optimizer state found (t={optimizer_state.get('t', 0)})")
-        print("Note: You'll need to recreate optimizer and load state manually if needed")
-
-    epoch = checkpoint.get('epoch', 0)
-    loss = checkpoint.get('loss', float('inf'))
-
-    print(f"Checkpoint loaded successfully!")
-    print(f"Epoch: {epoch}, Loss: {loss:.4f}")
-
-    return model, optimizer, epoch, loss
-
-
 def train(
     model,
     train_data,
