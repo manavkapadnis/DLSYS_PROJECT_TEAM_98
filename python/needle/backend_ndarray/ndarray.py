@@ -59,10 +59,23 @@ class BackendDevice:
         return arr
 
 
+_cuda_initialized = False
+
 def cuda() -> BackendDevice:
     """Return cuda device"""
+    global _cuda_initialized
     try:
         from . import ndarray_backend_cuda  # type: ignore[attr-defined]
+
+        # Initialize CUDA on first use
+        if not _cuda_initialized:
+            try:
+                device_count = ndarray_backend_cuda.cuda_init()
+                print(f"CUDA initialized successfully with {device_count} device(s)")
+                _cuda_initialized = True
+            except Exception as e:
+                print(f"Warning: CUDA initialization failed: {e}")
+                print("CUDA operations may not work correctly")
 
         return BackendDevice("cuda", ndarray_backend_cuda)
     except ImportError:
