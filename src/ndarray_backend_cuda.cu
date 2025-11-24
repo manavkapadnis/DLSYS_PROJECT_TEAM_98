@@ -507,17 +507,24 @@ __global__ void BlockSparseAttentionKernel(
     scalar_t m_i = -1e20f; // Running max
     scalar_t o_i = 0.0f; // Running output value for this position
     
+    // Bounds check for query block
+    if (query_block_idx >= (seq_len + block_size - 1) / block_size) {
+        return;
+    }
+
     // Only process if this block is in the sparse pattern
     int start_idx = mask.block_offsets[query_block_idx];
     int end_idx = mask.block_offsets[query_block_idx + 1];
-    
+
     if (start_idx == end_idx) return;  // No attention for this block
-    
+
     // Load Q tile for this block
     // Q is (batch, head, q_row, dim)
     int q_offset = batch_head_offset + q_start_row * head_dim;
-    if (ty < block_size && tx < head_dim) {
+    if (ty < block_size && tx < head_dim && (q_start_row + ty) < seq_len) {
         tile_q[ty * head_dim + tx] = q[q_offset + ty * head_dim + tx];
+    } else if (ty < block_size && tx < head_dim) {
+        tile_q[ty * head_dim + tx] = 0.0f;  // Pad with zeros
     }
     __syncthreads();
 
@@ -526,16 +533,19 @@ __global__ void BlockSparseAttentionKernel(
         int key_block_idx = mask.row_blocks[kb];
         int k_start_row = key_block_idx * block_size;
         int k_offset = batch_head_offset + k_start_row * head_dim;
-        
-        // Load K tile
-        if (ty < block_size && tx < head_dim) {
+
+        // Load K tile with bounds checking
+        if (ty < block_size && tx < head_dim && (k_start_row + ty) < seq_len) {
             tile_k[ty * head_dim + tx] = k[k_offset + ty * head_dim + tx];
+        } else if (ty < block_size && tx < head_dim) {
+            tile_k[ty * head_dim + tx] = 0.0f;  // Pad with zeros
         }
         
-        // Load V tile (Optimized: we could load V later, but usually loading together or just-in-time)
-        // For online softmax we need V in the loop.
-        if (ty < block_size && tx < head_dim) {
+        // Load V tile with bounds checking
+        if (ty < block_size && tx < head_dim && (k_start_row + ty) < seq_len) {
              tile_v[ty * head_dim + tx] = v[k_offset + ty * head_dim + tx];
+        } else if (ty < block_size && tx < head_dim) {
+             tile_v[ty * head_dim + tx] = 0.0f;  // Pad with zeros
         }
         __syncthreads();
         
@@ -590,36 +600,42 @@ __global__ void BlockSparseAttentionKernel(
         __syncthreads();
     }
     
-    // Write results
-    // Out = o_i / l_i
-    if (ty < block_size && tx < head_dim) {
+    // Write results with bounds checking
+    if (ty < block_size && tx < head_dim && (q_start_row + ty) < seq_len) {
         int out_offset = batch_head_offset + q_start_row * head_dim + ty * head_dim + tx;
-        out[out_offset] = o_i / l_i;
+        if (l_i > 0.0f) {
+            out[out_offset] = o_i / l_i;
+        } else {
+            out[out_offset] = 0.0f;  // No attention values, output zero
+        }
     }
 }
 
 // Helper to convert std::vector CSR to Device Arrays
 BlockSparseMask ConvertToBlockMask(const std::vector<int>& sparse_blocks, int block_size) {
-    // Assumption: sparse_blocks is serialized [num_rows, num_cols, num_active_blocks, ...offsets..., ...indices...]
-    // If not, we'd need to parse the specific format.
-    // Based on "help" code context, we assume a format or just use the raw data if prepared.
-    // Let's assume the user passes [rows, active_count, offset0, offset1..., index0, index1...]
-    
-    int num_rows = sparse_blocks[0];
-    int num_active = sparse_blocks[2]; // assuming index 2 based on typical simple serialization
-    
-    // Offsets start at index 3
-    // Indices start at index 3 + (num_rows + 1)
-    
-    std::vector<int> h_offsets;
-    std::vector<int> h_indices;
-    
-    // Safety check - if vector is just pairs, this logic would need to change.
-    // Implementing a robust fallback: assume raw data is passed as:
-    // [num_rows, num_active, ...offsets (size num_rows+1)..., ...indices (size num_active)...]
-    
+    // Format: [n_blocks, num_active, offset0, offset1, ..., offsetN, index0, index1, ...]
+    // Where offsets has size (n_blocks + 1) and indices has size num_active
+
+    if (sparse_blocks.size() < 2) {
+        throw std::runtime_error("Invalid sparse_blocks: too small");
+    }
+
+    int num_rows = sparse_blocks[0];      // n_blocks (number of query blocks)
+    int num_active = sparse_blocks[1];    // num_active (total number of active blocks)
+
+    // Offsets start at index 2, size is (num_rows + 1)
+    // Indices start after offsets, size is num_active
     int offset_start = 2;
-    int index_start = offset_start + num_rows + 1;
+    int index_start = offset_start + (num_rows + 1);
+
+    // Validate sizes
+    int expected_size = 2 + (num_rows + 1) + num_active;
+    if (sparse_blocks.size() < expected_size) {
+        throw std::runtime_error(
+            std::string("Invalid sparse_blocks size: expected at least ") +
+            std::to_string(expected_size) + " got " + std::to_string(sparse_blocks.size())
+        );
+    }
     
     // Allocate device memory
     int* d_row_blocks = nullptr;

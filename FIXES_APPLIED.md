@@ -4,14 +4,27 @@
 
 ### 1. CUDA Memory Error ("illegal memory access was encountered")
 
-**Root Cause:**
-- CUDA device not properly initialized before memory allocation
-- Missing error checking and synchronization
-- Potential memory leaks in sparse attention kernel
+**Root Causes:**
+1. CUDA device not properly initialized before memory allocation
+2. **Critical Bug:** Incorrect metadata parsing in `ConvertToBlockMask` - was reading `num_active` from index 2 instead of index 1
+3. Missing bounds checking in BlockSparseAttention kernel causing out-of-bounds memory access
+4. Missing error checking and synchronization
+5. No CUDA context recovery after kernel failures
 
 **Fixes Applied:**
 
 **File: `src/ndarray_backend_cuda.cu`**
+- **CRITICAL FIX:** Fixed metadata parsing bug in `ConvertToBlockMask`:
+  - Changed `num_active = sparse_blocks[2]` to `num_active = sparse_blocks[1]`
+  - This was causing incorrect memory allocation and out-of-bounds access
+- Added comprehensive bounds checking in `BlockSparseAttentionKernel`:
+  - Query block index validation
+  - Bounds checks for Q, K, V tile loading with zero-padding
+  - Bounds check for output writing
+  - Division by zero protection (check `l_i > 0.0f`)
+- Added validation in `ConvertToBlockMask`:
+  - Size validation before parsing metadata
+  - Clear error messages with expected vs actual sizes
 - Added explicit CUDA device initialization in `CudaArray` constructor
 - Added `cudaSetDevice(0)` and `cudaDeviceSynchronize()` calls
 - Improved error messages with detailed CUDA error strings
@@ -24,6 +37,12 @@
 **File: `python/needle/backend_ndarray/ndarray.py`**
 - Added automatic CUDA initialization on first device access
 - Added initialization status tracking to avoid redundant init calls
+
+**File: `python/needle/nn/nn_sparse_attention.py`**
+- Added CUDA context recovery on kernel failure:
+  - Automatically resets and reinitializes CUDA device when kernel fails
+  - Prevents cascading failures from corrupted CUDA context
+  - Falls back to slow implementation after recovery attempt
 
 ### 2. Missing `load_checkpoint` Function
 
@@ -68,17 +87,21 @@ make lib
 
 ## Key Improvements
 
-1. **Robust CUDA Initialization**: Device is now properly initialized before any memory operations
-2. **Better Error Messages**: CUDA errors now include detailed error strings for easier debugging
-3. **Memory Leak Prevention**: All error paths properly clean up allocated memory
-4. **Checkpoint Loading**: Full checkpoint loading functionality matching the save format
-5. **Synchronization**: Proper kernel synchronization to catch runtime errors immediately
+1. **Fixed Critical Metadata Bug**: Corrected sparse block metadata parsing that was causing illegal memory access
+2. **Comprehensive Bounds Checking**: All kernel memory accesses now validated to prevent out-of-bounds errors
+3. **Robust CUDA Initialization**: Device is now properly initialized before any memory operations
+4. **CUDA Context Recovery**: Automatic device reset on kernel failure prevents cascading errors
+5. **Better Error Messages**: CUDA errors now include detailed error strings for easier debugging
+6. **Memory Leak Prevention**: All error paths properly clean up allocated memory
+7. **Checkpoint Loading**: Full checkpoint loading functionality matching the save format
+8. **Synchronization**: Proper kernel synchronization to catch runtime errors immediately
 
 ## Files Modified
 
-1. `src/ndarray_backend_cuda.cu` - CUDA backend improvements
-2. `python/needle/backend_ndarray/ndarray.py` - CUDA initialization
-3. `apps/train_pythia.py` - Added load_checkpoint function
+1. `src/ndarray_backend_cuda.cu` - **Critical metadata bug fix + bounds checking**
+2. `python/needle/nn/nn_sparse_attention.py` - CUDA context recovery
+3. `python/needle/backend_ndarray/ndarray.py` - CUDA initialization
+4. `apps/train_pythia.py` - Added load_checkpoint function
 
 ## Testing
 

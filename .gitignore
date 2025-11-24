@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+*.so
+*.o
+*.obj
+*.a
+*.lib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Checkpoints
+checkpoints/
+*.pkl
+*.pth
+
+# Logs
+*.log

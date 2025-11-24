@@ -247,6 +247,17 @@ class BlockSparseMultiHeadAttention(Module):
                 return result, None
             except Exception as e:
                 print(f"Falling back to slow implementation: {e}")
+                # If CUDA kernel failed, try to reset device to recover from corrupted context
+                if self.device and self.device.name == "cuda":
+                    try:
+                        import needle.backend_ndarray.ndarray_backend_cuda as cuda_backend
+                        print("Attempting CUDA device reset to recover from error...")
+                        cuda_backend.cuda_reset()
+                        # Re-initialize
+                        cuda_backend.cuda_init()
+                        print("CUDA device reset successful")
+                    except Exception as reset_err:
+                        print(f"CUDA reset failed: {reset_err}")
                 pass
 
         # Compute attention scores
