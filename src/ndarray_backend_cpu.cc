@@ -484,5 +484,3 @@ PYBIND11_MODULE(ndarray_backend_cpu, m) {
   // Register CPU Block Sparse Attention
   m.def("block_sparse_attention", BlockSparseAttention);
 }
-
-}

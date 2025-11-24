@@ -718,5 +718,3 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
   // Register the new Block Sparse Attention function
   m.def("block_sparse_attention", BlockSparseAttention);
 }
-
-}
