@@ -19,40 +19,13 @@ const size_t ELEM_SIZE = sizeof(scalar_t);
 
 struct CudaArray {
   CudaArray(const size_t size) {
-    // Initialize CUDA device if not already done
-    cudaError_t err = cudaSetDevice(0);
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA SetDevice failed: ") + cudaGetErrorString(err));
-    }
-
-    // Clear any previous CUDA errors
-    cudaGetLastError();
-
-    // Allocate memory
-    err = cudaMalloc(&ptr, size * ELEM_SIZE);
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA Malloc failed: ") + cudaGetErrorString(err));
-    }
-
-    // Synchronize to ensure allocation completed
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-      cudaFree(ptr);  // Clean up on error
-      throw std::runtime_error(std::string("CUDA Sync after malloc failed: ") + cudaGetErrorString(err));
-    }
-
+    cudaError_t err = cudaMalloc(&ptr, size * ELEM_SIZE);
+    if (err != cudaSuccess) throw std::runtime_error(cudaGetErrorString(err));
     this->size = size;
   }
-
-  ~CudaArray() {
-    if (ptr != nullptr) {
-      cudaFree(ptr);
-      ptr = nullptr;
-    }
-  }
-
+  ~CudaArray() { cudaFree(ptr); }
   size_t ptr_as_int() { return (size_t)ptr; }
-
+  
   scalar_t* ptr;
   size_t size;
 };
@@ -622,33 +595,14 @@ BlockSparseMask ConvertToBlockMask(const std::vector<int>& sparse_blocks, int bl
     int index_start = offset_start + num_rows + 1;
     
     // Allocate device memory
-    int* d_row_blocks = nullptr;
-    int* d_block_offsets = nullptr;
-
-    cudaError_t err = cudaMalloc(&d_row_blocks, num_active * sizeof(int));
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("Failed to allocate d_row_blocks: ") + cudaGetErrorString(err));
-    }
-
-    err = cudaMalloc(&d_block_offsets, (num_rows + 1) * sizeof(int));
-    if (err != cudaSuccess) {
-        cudaFree(d_row_blocks);  // Clean up previously allocated memory
-        throw std::runtime_error(std::string("Failed to allocate d_block_offsets: ") + cudaGetErrorString(err));
-    }
-
-    err = cudaMemcpy(d_block_offsets, &sparse_blocks[offset_start], (num_rows + 1) * sizeof(int), cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        cudaFree(d_row_blocks);
-        cudaFree(d_block_offsets);
-        throw std::runtime_error(std::string("Failed to copy d_block_offsets to device: ") + cudaGetErrorString(err));
-    }
-
-    err = cudaMemcpy(d_row_blocks, &sparse_blocks[index_start], num_active * sizeof(int), cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        cudaFree(d_row_blocks);
-        cudaFree(d_block_offsets);
-        throw std::runtime_error(std::string("Failed to copy d_row_blocks to device: ") + cudaGetErrorString(err));
-    }
+    int* d_row_blocks;
+    int* d_block_offsets;
+    
+    cudaMalloc(&d_row_blocks, num_active * sizeof(int));
+    cudaMalloc(&d_block_offsets, (num_rows + 1) * sizeof(int));
+    
+    cudaMemcpy(d_block_offsets, &sparse_blocks[offset_start], (num_rows + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_row_blocks, &sparse_blocks[index_start], num_active * sizeof(int), cudaMemcpyHostToDevice);
     
     BlockSparseMask mask;
     mask.row_blocks = d_row_blocks;
@@ -689,25 +643,7 @@ void BlockSparseAttention(
         q.ptr, k.ptr, v.ptr, out->ptr, mask,
         batch_size, num_heads, seq_len, head_dim, TILE
     );
-
-    // Check kernel launch errors
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        // Cleanup before throwing
-        cudaFree(mask.row_blocks);
-        cudaFree(mask.block_offsets);
-        throw std::runtime_error(std::string("BlockSparseAttention kernel launch failed: ") + cudaGetErrorString(err));
-    }
-
-    // Wait for kernel to complete
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        // Cleanup before throwing
-        cudaFree(mask.row_blocks);
-        cudaFree(mask.block_offsets);
-        throw std::runtime_error(std::string("BlockSparseAttention kernel execution failed: ") + cudaGetErrorString(err));
-    }
-
+    
     // Cleanup temporary mask arrays
     cudaFree(mask.row_blocks);
     cudaFree(mask.block_offsets);
@@ -723,49 +659,6 @@ PYBIND11_MODULE(ndarray_backend_cuda, m) {
 
   m.attr("__device_name__") = "cuda";
   m.attr("__tile_size__") = TILE;
-
-  // CUDA initialization function
-  m.def("cuda_init", []() {
-    int device_count = 0;
-    cudaError_t err = cudaGetDeviceCount(&device_count);
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA GetDeviceCount failed: ") + cudaGetErrorString(err));
-    }
-    if (device_count == 0) {
-      throw std::runtime_error("No CUDA devices found");
-    }
-
-    err = cudaSetDevice(0);
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA SetDevice failed: ") + cudaGetErrorString(err));
-    }
-
-    // Clear any previous errors
-    cudaGetLastError();
-
-    // Force initialization by allocating and freeing a small buffer
-    void* temp_ptr;
-    err = cudaMalloc(&temp_ptr, 1);
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA initialization malloc failed: ") + cudaGetErrorString(err));
-    }
-    cudaFree(temp_ptr);
-
-    err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA initialization sync failed: ") + cudaGetErrorString(err));
-    }
-
-    return device_count;
-  });
-
-  // CUDA device reset function (useful for debugging memory issues)
-  m.def("cuda_reset", []() {
-    cudaError_t err = cudaDeviceReset();
-    if (err != cudaSuccess) {
-      throw std::runtime_error(std::string("CUDA DeviceReset failed: ") + cudaGetErrorString(err));
-    }
-  });
 
   py::class_<CudaArray>(m, "Array")
       .def(py::init<size_t>(), py::return_value_policy::take_ownership)
