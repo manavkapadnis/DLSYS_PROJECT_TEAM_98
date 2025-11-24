@@ -1,0 +1,11 @@
+DENSE VS SPARSE ATTENTION COMPARISON SUMMARY
+================================================================================
+
+Dataset: WikiText-2
+Epochs: 10
+Training speedup: 1.55×
+Inference speedup: 2.16×
+Loss difference: 0.1983
+
+Dense final val loss: 7.0453
+Sparse final val loss: 6.8470
