@@ -781,12 +781,127 @@ class BlockSparseAttention(TensorOp):
         return out
 
     def gradient(self, out_grad, node):
-        # Gradient not implemented for sparse attention yet
-        # Returning zeros or raising error? 
-        # For now, let's just return None or zeros to avoid crashing if called, 
-        # but ideally this should be implemented.
-        # Given the task scope, we might not need backward.
-        raise NotImplementedError("Gradient for BlockSparseAttention not implemented")
+        """
+        Compute gradients for block sparse attention.
+        
+        For attention: O = softmax(Q @ K^T / sqrt(d)) @ V
+        Uses split operation instead of indexing since Tensor is not subscriptable.
+        """
+        q, k, v = node.inputs
+        batch_size, num_heads, seq_len, head_dim = q.shape
+        
+        # Scale factor
+        scale = head_dim ** 0.5
+        
+        # Reshape to 3D for easier handling: merge batch and heads
+        # (batch, heads, seq, head_dim) -> (batch*heads, seq, head_dim)
+        q_reshaped = reshape(q, (batch_size * num_heads, seq_len, head_dim))
+        k_reshaped = reshape(k, (batch_size * num_heads, seq_len, head_dim))
+        v_reshaped = reshape(v, (batch_size * num_heads, seq_len, head_dim))
+        out_grad_reshaped = reshape(out_grad, (batch_size * num_heads, seq_len, head_dim))
+        
+        # Split along the batch*heads dimension to get individual 2D tensors
+        q_splits = split(q_reshaped, axis=0)  # tuple of (seq, head_dim) tensors
+        k_splits = split(k_reshaped, axis=0)
+        v_splits = split(v_reshaped, axis=0)
+        out_grad_splits = split(out_grad_reshaped, axis=0)
+        
+        # Process each head
+        attention_weights_list = []
+        scores_list = []
+        
+        for i in range(batch_size * num_heads):
+            # Get 2D slices - these are now (1, seq, head_dim), need to squeeze
+            q_3d = q_splits[i]  # (1, seq, head_dim)
+            k_3d = k_splits[i]
+            
+            # Reshape to remove the first dimension
+            q_2d = reshape(q_3d, (seq_len, head_dim))
+            k_2d = reshape(k_3d, (seq_len, head_dim))
+            
+            # Compute scores: (seq, head_dim) @ (head_dim, seq) = (seq, seq)
+            k_2d_t = transpose(k_2d)  # (head_dim, seq)
+            scores_2d = q_2d @ k_2d_t / scale  # (seq, seq)
+            scores_list.append(scores_2d)
+            
+            # Apply softmax - need to handle broadcasting manually
+            scores_exp = exp(scores_2d)
+            scores_sum = summation(scores_exp, axes=(1,))  # (seq,)
+            scores_sum = reshape(scores_sum, (seq_len, 1))
+            # Broadcast scores_sum to (seq, seq) for division
+            scores_sum_broadcasted = broadcast_to(scores_sum, (seq_len, seq_len))
+            attention_2d = scores_exp / scores_sum_broadcasted  # (seq, seq)
+            attention_weights_list.append(attention_2d)
+        
+        # Stack attention weights
+        attention_weights = stack(attention_weights_list, axis=0)  # (batch*heads, seq, seq)
+        
+        # Split attention weights for gradient computation
+        attention_splits = split(attention_weights, axis=0)
+        
+        # Compute gradients
+        grad_v_list = []
+        grad_q_list = []
+        grad_k_list = []
+        
+        for i in range(batch_size * num_heads):
+            # Get 2D tensors
+            attention_3d = attention_splits[i]  # (1, seq, seq)
+            attention_2d = reshape(attention_3d, (seq_len, seq_len))
+            
+            out_grad_3d = out_grad_splits[i]  # (1, seq, head_dim)
+            out_grad_2d = reshape(out_grad_3d, (seq_len, head_dim))
+            
+            v_3d = v_splits[i]  # (1, seq, head_dim)
+            v_2d = reshape(v_3d, (seq_len, head_dim))
+            
+            q_3d = q_splits[i]  # (1, seq, head_dim)
+            q_2d = reshape(q_3d, (seq_len, head_dim))
+            
+            k_3d = k_splits[i]  # (1, seq, head_dim)
+            k_2d = reshape(k_3d, (seq_len, head_dim))
+            
+            # Gradient w.r.t. V: A^T @ dL/dO
+            attention_2d_t = transpose(attention_2d)  # (seq, seq)
+            grad_v_2d = attention_2d_t @ out_grad_2d  # (seq, head_dim)
+            grad_v_list.append(grad_v_2d)
+            
+            # Gradient w.r.t. attention weights: dL/dO @ V^T
+            v_2d_t = transpose(v_2d)  # (head_dim, seq)
+            grad_attention_2d = out_grad_2d @ v_2d_t  # (seq, seq)
+            
+            # Gradient through softmax
+            # dL/dS = A * (dL/dA - sum(dL/dA * A, axis=-1, keepdims=True))
+            grad_attention_weighted = grad_attention_2d * attention_2d
+            grad_attention_sum = summation(grad_attention_weighted, axes=(1,))  # (seq,)
+            grad_attention_sum = reshape(grad_attention_sum, (seq_len, 1))
+            # Broadcast for subtraction
+            grad_attention_sum_broadcasted = broadcast_to(grad_attention_sum, (seq_len, seq_len))
+            grad_scores_2d = attention_2d * (grad_attention_2d - grad_attention_sum_broadcasted)
+            
+            # Scale by 1/sqrt(d)
+            grad_scores_2d = grad_scores_2d / scale
+            
+            # Gradient w.r.t. Q: dL/dS @ K
+            grad_q_2d = grad_scores_2d @ k_2d  # (seq, head_dim)
+            grad_q_list.append(grad_q_2d)
+            
+            # Gradient w.r.t. K: dL/dS^T @ Q
+            grad_scores_2d_t = transpose(grad_scores_2d)  # (seq, seq)
+            grad_k_2d = grad_scores_2d_t @ q_2d  # (seq, head_dim)
+            grad_k_list.append(grad_k_2d)
+        
+        # Stack all gradients
+        grad_v = stack(grad_v_list, axis=0)  # (batch*heads, seq, head_dim)
+        grad_q = stack(grad_q_list, axis=0)  # (batch*heads, seq, head_dim)
+        grad_k = stack(grad_k_list, axis=0)  # (batch*heads, seq, head_dim)
+        
+        # Reshape back to 4D
+        grad_v = reshape(grad_v, (batch_size, num_heads, seq_len, head_dim))
+        grad_q = reshape(grad_q, (batch_size, num_heads, seq_len, head_dim))
+        grad_k = reshape(grad_k, (batch_size, num_heads, seq_len, head_dim))
+        
+        return grad_q, grad_k, grad_v
 
 
 def block_sparse_attention(q, k, v, sparse_blocks, block_size):
