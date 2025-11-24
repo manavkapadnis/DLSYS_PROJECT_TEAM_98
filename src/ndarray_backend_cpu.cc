@@ -5,8 +5,6 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
-#include <limits>
-#include <vector>
 
 namespace needle {
 namespace cpu {
@@ -63,6 +61,21 @@ size_t GetOffset(size_t idx, const std::vector<int32_t>& shape,
 
 void Compact(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shape,
              std::vector<int32_t> strides, size_t offset) {
+  /**
+   * Compact an array in memory
+   *
+   * Args:
+   *   a: non-compact representation of the array, given as input
+   *   out: compact version of the array to be written
+   *   shape: shapes of each dimension for a and out
+   *   strides: strides of the *a* array (not out, which has compact strides)
+   *   offset: offset of the *a* array (not out, which has zero offset, being compact)
+   *
+   * Returns:
+   *  void (you need to modify out directly, rather than returning anything; this is true for all the
+   *  function will implement here, so we won't repeat this note.)
+   */
+  /// BEGIN SOLUTION
   size_t size = 1;
   for (int32_t dim : shape) {
     size *= dim;
@@ -71,40 +84,97 @@ void Compact(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shap
   for (size_t i = 0; i < size; i++) {
     out->ptr[i] = a.ptr[offset + GetOffset(i, shape, strides)];
   }
+/// END SOLUTION
 }
 
 void EwiseSetitem(const AlignedArray& a, AlignedArray* out, std::vector<int32_t> shape,
                   std::vector<int32_t> strides, size_t offset) {
-  size_t size = 1;
-  for (int32_t dim : shape) {
-    size *= dim;
-  }
+  /**
+   * Set items in a (non-compact) array
+   *
+   * Args:
+   *   a: _compact_ array whose items will be written to out
+   *   out: non-compact array whose items are to be written
+   *   shape: shapes of each dimension for a and out
+   *   strides: strides of the *out* array (not a, which has compact strides)
+   *   offset: offset of the *out* array (not a, which has zero offset, being compact)
+   */
 
-  for (size_t i = 0; i < size; i++) {
-    out->ptr[offset + GetOffset(i, shape, strides)] = a.ptr[i];
-  }
+   /// BEGIN SOLUTION
+size_t size = 1;
+for (int32_t dim : shape) {
+  size *= dim;
+}
+
+for (size_t i = 0; i < size; i++) {
+  out->ptr[offset + GetOffset(i, shape, strides)] = a.ptr[i];
+}
+/// END SOLUTION
 }
 
 void ScalarSetitem(const size_t size, scalar_t val, AlignedArray* out, std::vector<int32_t> shape,
                    std::vector<int32_t> strides, size_t offset) {
-  for (size_t i = 0; i < size; i++) {
-    out->ptr[offset + GetOffset(i, shape, strides)] = val;
-  }
+  /**
+   * Set items is a (non-compact) array
+   *
+   * Args:
+   *   size: number of elements to write in out array (note that this will note be the same as
+   *         out.size, because out is a non-compact subset array);  it _will_ be the same as the
+   *         product of items in shape, but convenient to just pass it here.
+   *   val: scalar value to write to
+   *   out: non-compact array whose items are to be written
+   *   shape: shapes of each dimension of out
+   *   strides: strides of the out array
+   *   offset: offset of the out array
+   */
+
+  /// BEGIN SOLUTION
+for (size_t i = 0; i < size; i++) {
+  out->ptr[offset + GetOffset(i, shape, strides)] = val;
+}
+/// END SOLUTION
 }
 
 void EwiseAdd(const AlignedArray& a, const AlignedArray& b, AlignedArray* out) {
+  /**
+   * Set entries in out to be the sum of correspondings entires in a and b.
+   */
   for (size_t i = 0; i < a.size; i++) {
     out->ptr[i] = a.ptr[i] + b.ptr[i];
   }
 }
 
 void ScalarAdd(const AlignedArray& a, scalar_t val, AlignedArray* out) {
+  /**
+   * Set entries in out to be the sum of corresponding entry in a plus the scalar val.
+   */
   for (size_t i = 0; i < a.size; i++) {
     out->ptr[i] = a.ptr[i] + val;
   }
 }
 
-// ============================================================================
+
+/**
+ * In the code the follows, use the above template to create analogous element-wise
+ * and and scalar operators for the following functions.  See the numpy backend for
+ * examples of how they should work.
+ *   - EwiseMul, ScalarMul
+ *   - EwiseDiv, ScalarDiv
+ *   - ScalarPower
+ *   - EwiseMaximum, ScalarMaximum
+ *   - EwiseEq, ScalarEq
+ *   - EwiseGe, ScalarGe
+ *   - EwiseLog
+ *   - EwiseExp
+ *   - EwiseTanh
+ *
+ * If you implement all these naively, there will be a lot of repeated code, so
+ * you are welcome (but not required), to use macros or templates to define these
+ * functions (however you want to do so, as long as the functions match the proper)
+ * signatures above.
+ */
+
+ // ============================================================================
 // Multiplication
 // ============================================================================
 
@@ -227,39 +297,94 @@ void EwiseTanh(const AlignedArray& a, AlignedArray* out) {
 
 void Matmul(const AlignedArray& a, const AlignedArray& b, AlignedArray* out, uint32_t m, uint32_t n,
             uint32_t p) {
-  // Initialize output to zero
-  for (uint32_t i = 0; i < m * p; i++) {
-    out->ptr[i] = 0;
-  }
+  /**
+   * Multiply two (compact) matrices into an output (also compact) matrix.  For this implementation
+   * you can use the "naive" three-loop algorithm.
+   *
+   * Args:
+   *   a: compact 2D array of size m x n
+   *   b: compact 2D array of size n x p
+   *   out: compact 2D array of size m x p to write the output to
+   *   m: rows of a / out
+   *   n: columns of a / rows of b
+   *   p: columns of b / out
+   */
 
-  // Naive matrix multiplication
-  for (uint32_t i = 0; i < m; i++) {
-    for (uint32_t j = 0; j < p; j++) {
-      for (uint32_t k = 0; k < n; k++) {
-        out->ptr[i * p + j] += a.ptr[i * n + k] * b.ptr[k * p + j];
-      }
+  /// BEGIN SOLUTION
+  // Initialize output to zero
+for (uint32_t i = 0; i < m * p; i++) {
+  out->ptr[i] = 0;
+}
+
+// Naive matrix multiplication
+for (uint32_t i = 0; i < m; i++) {
+  for (uint32_t j = 0; j < p; j++) {
+    for (uint32_t k = 0; k < n; k++) {
+      out->ptr[i * p + j] += a.ptr[i * n + k] * b.ptr[k * p + j];
     }
   }
+}
+/// END SOLUTION
 }
 
 inline void AlignedDot(const float* __restrict__ a,
                        const float* __restrict__ b,
                        float* __restrict__ out) {
+
+  /**
+   * Multiply together two TILE x TILE matrices, and _add _the result to out (it is important to add
+   * the result to the existing out, which you should not set to zero beforehand).  We are including
+   * the compiler flags here that enable the compile to properly use vector operators to implement
+   * this function.  Specifically, the __restrict__ keyword indicates to the compile that a, b, and
+   * out don't have any overlapping memory (which is necessary in order for vector operations to be
+   * equivalent to their non-vectorized counterparts (imagine what could happen otherwise if a, b,
+   * and out had overlapping memory).  Similarly the __builtin_assume_aligned keyword tells the
+   * compiler that the input array will be aligned to the appropriate blocks in memory, which also
+   * helps the compiler vectorize the code.
+   *
+   * Args:
+   *   a: compact 2D array of size TILE x TILE
+   *   b: compact 2D array of size TILE x TILE
+   *   out: compact 2D array of size TILE x TILE to write to
+   */
+
   a = (const float*)__builtin_assume_aligned(a, TILE * ELEM_SIZE);
   b = (const float*)__builtin_assume_aligned(b, TILE * ELEM_SIZE);
   out = (float*)__builtin_assume_aligned(out, TILE * ELEM_SIZE);
 
-  for (uint32_t i = 0; i < TILE; i++) {
-    for (uint32_t j = 0; j < TILE; j++) {
-      for (uint32_t k = 0; k < TILE; k++) {
-        out[i * TILE + j] += a[i * TILE + k] * b[k * TILE + j];
-      }
+  /// BEGIN SOLUTION
+for (uint32_t i = 0; i < TILE; i++) {
+  for (uint32_t j = 0; j < TILE; j++) {
+    for (uint32_t k = 0; k < TILE; k++) {
+      out[i * TILE + j] += a[i * TILE + k] * b[k * TILE + j];
     }
   }
+}
+  /// END SOLUTION
 }
 
 void MatmulTiled(const AlignedArray& a, const AlignedArray& b, AlignedArray* out, uint32_t m,
                  uint32_t n, uint32_t p) {
+  /**
+   * Matrix multiplication on tiled representations of array.  In this setting, a, b, and out
+   * are all *4D* compact arrays of the appropriate size, e.g. a is an array of size
+   *   a[m/TILE][n/TILE][TILE][TILE]
+   * You should do the multiplication tile-by-tile to improve performance of the array (i.e., this
+   * function should call `AlignedDot()` implemented above).
+   *
+   * Note that this function will only be called when m, n, p are all multiples of TILE, so you can
+   * assume that this division happens without any remainder.
+   *
+   * Args:
+   *   a: compact 4D array of size m/TILE x n/TILE x TILE x TILE
+   *   b: compact 4D array of size n/TILE x p/TILE x TILE x TILE
+   *   out: compact 4D array of size m/TILE x p/TILE x TILE x TILE to write to
+   *   m: rows of a / out
+   *   n: columns of a / rows of b
+   *   p: columns of b / out
+   *
+   */
+  /// BEGIN SOLUTION
   uint32_t m_tiles = m / TILE;
   uint32_t n_tiles = n / TILE;
   uint32_t p_tiles = p / TILE;
@@ -283,9 +408,18 @@ void MatmulTiled(const AlignedArray& a, const AlignedArray& b, AlignedArray* out
       }
     }
   }
+/// END SOLUTION
 }
 
 void ReduceMax(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
+  /**
+   * Reduce by taking maximum over `reduce_size` contiguous blocks.
+   *
+   * Args:
+   *   a: compact array of size a.size = out.size * reduce_size to reduce over
+   *   out: compact array to write into
+   *   reduce_size: size of the dimension to reduce over
+   */
   size_t out_size = a.size / reduce_size;
   
   for (size_t i = 0; i < out_size; i++) {
@@ -301,6 +435,14 @@ void ReduceMax(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
 }
 
 void ReduceSum(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
+  /**
+   * Reduce by taking sum over `reduce_size` contiguous blocks.
+   *
+   * Args:
+   *   a: compact array of size a.size = out.size * reduce_size to reduce over
+   *   out: compact array to write into
+   *   reduce_size: size of the dimension to reduce over
+   */
   size_t out_size = a.size / reduce_size;
   
   for (size_t i = 0; i < out_size; i++) {
@@ -311,114 +453,6 @@ void ReduceSum(const AlignedArray& a, AlignedArray* out, size_t reduce_size) {
     out->ptr[i] = sum;
   }
 }
-
-// ============================================================================
-// Block Sparse Attention (CPU)
-// ============================================================================
-
-void BlockSparseAttention(
-    const AlignedArray& q,
-    const AlignedArray& k, 
-    const AlignedArray& v,
-    AlignedArray* out,
-    const std::vector<int>& sparse_blocks, // [num_rows, num_active, off0...offN, idx0...idxM]
-    int batch_size,
-    int num_heads,
-    int seq_len,
-    int head_dim
-) {
-    // Unpack Mask data (CSR Format)
-    int num_rows = sparse_blocks[0];
-    // int num_active = sparse_blocks[1]; // Not strictly needed for loop traversal
-    
-    // Offsets start at index 3
-    // Indices start at index 3 + (num_rows + 1)
-    const int* offsets = &sparse_blocks[3];
-    const int* indices = &sparse_blocks[3 + num_rows + 1];
-    
-    // Block size (TILE) assumed to be passed or fixed. 
-    // Usually passed as arg, but here we can infer or use TILE constant.
-    // In CPU implementation, we can iterate element-wise or block-wise.
-    int block_size = TILE; 
-    
-    float scale = 1.0f / std::sqrt((float)head_dim);
-
-    // Iterate Batch
-    for (int b = 0; b < batch_size; b++) {
-        // Iterate Heads
-        for (int h = 0; h < num_heads; h++) {
-            
-            int batch_head_offset = (b * num_heads + h) * (seq_len * head_dim);
-
-            // Iterate Query Blocks
-            for (int i_block = 0; i_block < num_rows; i_block++) {
-                
-                // Get range of Key blocks for this Query block
-                int start = offsets[i_block];
-                int end = offsets[i_block + 1];
-                
-                if (start == end) continue; // Skip empty blocks
-
-                // Iterate over rows within the Query Block
-                for (int i_in_block = 0; i_in_block < block_size; i_in_block++) {
-                    int i_global = i_block * block_size + i_in_block;
-                    if (i_global >= seq_len) break;
-
-                    // Row-wise Online Softmax variables
-                    float m_i = -std::numeric_limits<float>::infinity();
-                    float l_i = 0.0f;
-                    
-                    // Temp accumulator for output row (size head_dim)
-                    // We assume head_dim is small enough for stack, or alloc
-                    std::vector<float> o_i(head_dim, 0.0f);
-
-                    // Iterate Active Key Blocks
-                    for (int kb = start; kb < end; kb++) {
-                        int j_block = indices[kb];
-                        
-                        // Iterate rows in Key block (columns in Attn matrix)
-                        for (int j_in_block = 0; j_in_block < block_size; j_in_block++) {
-                            int j_global = j_block * block_size + j_in_block;
-                            // Bounds check not strictly needed if padded, but good for safety
-                            if (j_global >= seq_len) continue; 
-                            
-                            // Compute Score S_ij = Q[i] . K[j]
-                            float score = 0.0f;
-                            int q_offset = batch_head_offset + i_global * head_dim;
-                            int k_offset = batch_head_offset + j_global * head_dim;
-                            
-                            for (int d = 0; d < head_dim; d++) {
-                                score += q.ptr[q_offset + d] * k.ptr[k_offset + d];
-                            }
-                            score *= scale;
-
-                            // Update Online Softmax stats
-                            float m_prev = m_i;
-                            m_i = std::max(m_prev, score);
-                            float exp_score = std::exp(score - m_i);
-                            float correction = std::exp(m_prev - m_i);
-                            
-                            l_i = l_i * correction + exp_score;
-                            
-                            // Load V[j] and accumulate
-                            int v_offset = batch_head_offset + j_global * head_dim;
-                            for (int d = 0; d < head_dim; d++) {
-                                o_i[d] = o_i[d] * correction + exp_score * v.ptr[v_offset + d];
-                            }
-                        }
-                    }
-                    
-                    // Final Write Back: Out = o_i / l_i
-                    int out_row_offset = batch_head_offset + i_global * head_dim;
-                    for (int d = 0; d < head_dim; d++) {
-                        out->ptr[out_row_offset + d] = o_i[d] / l_i;
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 }  // namespace cpu
 }  // namespace needle
@@ -480,7 +514,4 @@ PYBIND11_MODULE(ndarray_backend_cpu, m) {
 
   m.def("reduce_max", ReduceMax);
   m.def("reduce_sum", ReduceSum);
-  
-  // Register CPU Block Sparse Attention
-  m.def("block_sparse_attention", BlockSparseAttention);
 }
