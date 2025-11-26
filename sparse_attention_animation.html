@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Block-Sparse Attention Animation - Efficient Transformers</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            overflow-x: hidden;
+            height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Title Section */
+        .title-section {
+            text-align: center;
+            margin-bottom: 40px;
+            animation: slideInDown 0.8s ease-out;
+        }
+
+        .title-section h1 {
+            font-size: 3.5em;
+            font-weight: bold;
+            background: linear-gradient(45deg, #00d4ff, #0099ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            text-shadow: 0 0 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .title-section p {
+            font-size: 1.3em;
+            color: #a0aec0;
+            font-weight: 300;
+        }
+
+        /* Attention Visualization */
+        .attention-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin: 40px 0;
+            max-width: 1200px;
+            width: 90%;
+        }
+
+        .attention-box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(0, 212, 255, 0.3);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            animation: slideInLeft 0.8s ease-out;
+        }
+
+        .attention-box:nth-child(2) {
+            animation: slideInRight 0.8s ease-out;
+        }
+
+        .attention-box h3 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            color: #00d4ff;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        canvas {
+            width: 100%;
+            height: 250px;
+            margin: 15px 0;
+            display: block;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .metric-item {
+            background: rgba(0, 212, 255, 0.1);
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 3px solid #00d4ff;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #a0aec0;
+            margin-bottom: 5px;
+        }
+
+        .metric-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+
+        /* Pattern Section */
+        .patterns-section {
+            width: 90%;
+            max-width: 1200px;
+            margin: 40px 0;
+            animation: fadeIn 1s ease-out 0.5s both;
+        }
+
+        .patterns-section h2 {
+            text-align: center;
+            font-size: 2em;
+            margin-bottom: 30px;
+            color: #00d4ff;
+        }
+
+        .pattern-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        .pattern-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(0, 212, 255, 0.2);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            animation: zoomIn 0.6s ease-out;
+        }
+
+        .pattern-card:nth-child(1) { animation-delay: 0.7s; }
+        .pattern-card:nth-child(2) { animation-delay: 0.8s; }
+        .pattern-card:nth-child(3) { animation-delay: 0.9s; }
+
+        .pattern-card:hover {
+            background: rgba(0, 212, 255, 0.1);
+            border-color: #00d4ff;
+            transform: translateY(-5px);
+        }
+
+        .pattern-canvas {
+            width: 100%;
+            height: 150px;
+            margin: 15px 0;
+            display: block;
+        }
+
+        .pattern-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #00d4ff;
+            margin: 10px 0;
+        }
+
+        .pattern-desc {
+            font-size: 0.9em;
+            color: #a0aec0;
+        }
+
+        /* Performance Section */
+        .performance-section {
+            width: 90%;
+            max-width: 1200px;
+            margin: 40px 0;
+            animation: fadeIn 1s ease-out 1s both;
+        }
+
+        .performance-section h2 {
+            text-align: center;
+            font-size: 2em;
+            margin-bottom: 30px;
+            color: #00d4ff;
+        }
+
+        .performance-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 25px;
+        }
+
+        .perf-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(0, 212, 255, 0.2);
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            animation: slideUp 0.6s ease-out;
+        }
+
+        .perf-card:nth-child(1) { animation-delay: 1.1s; }
+        .perf-card:nth-child(2) { animation-delay: 1.2s; }
+        .perf-card:nth-child(3) { animation-delay: 1.3s; }
+
+        .perf-icon {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+        }
+
+        .perf-value {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #00ff88;
+            margin: 10px 0;
+        }
+
+        .perf-label {
+            font-size: 1em;
+            color: #a0aec0;
+        }
+
+        /* Models Section */
+        .models-section {
+            width: 90%;
+            max-width: 1200px;
+            margin: 40px 0;
+            animation: fadeIn 1s ease-out 1.5s both;
+        }
+
+        .models-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .model-card {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 100, 255, 0.1));
+            border: 2px solid rgba(0, 212, 255, 0.4);
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            animation: slideInUp 0.6s ease-out;
+        }
+
+        .model-card:nth-child(1) { animation-delay: 1.5s; }
+        .model-card:nth-child(2) { animation-delay: 1.6s; }
+
+        .model-name {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #00d4ff;
+            margin-bottom: 15px;
+        }
+
+        .model-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+
+        .stat {
+            background: rgba(0, 212, 255, 0.1);
+            padding: 10px;
+            border-radius: 8px;
+            border-left: 3px solid #00ff88;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #a0aec0;
+            margin-bottom: 3px;
+        }
+
+        .stat-value {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #00ff88;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            animation: fadeIn 1s ease-out 2s both;
+        }
+
+        .footer h3 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            color: #00d4ff;
+        }
+
+        .footer p {
+            font-size: 1em;
+            color: #a0aec0;
+            max-width: 600px;
+        }
+
+        .speedup-bar {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .speedup-label {
+            width: 80px;
+            font-size: 0.9em;
+            color: #a0aec0;
+        }
+
+        .speedup-bar-bg {
+            flex: 1;
+            background: rgba(0, 212, 255, 0.1);
+            height: 30px;
+            border-radius: 15px;
+            margin: 0 15px;
+            overflow: hidden;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .speedup-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 10px;
+            animation: slideRight 1.5s ease-out;
+        }
+
+        .speedup-value {
+            font-size: 0.9em;
+            font-weight: bold;
+            color: white;
+            min-width: 50px;
+        }
+
+        /* Animations */
+        @keyframes slideInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes slideRight {
+            from {
+                width: 0;
+            }
+            to {
+                width: 100%;
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes zoomIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .attention-container {
+                grid-template-columns: 1fr;
+            }
+
+            .pattern-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .performance-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .models-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .title-section h1 {
+                font-size: 2.5em;
+            }
+        }
+
+        /* Scroll indicator */
+        .scroll-indicator {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00d4ff;
+            font-size: 0.9em;
+            opacity: 0.7;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Title -->
+        <div class="title-section">
+            <h1>⚡ Block-Sparse Attention</h1>
+            <p>Efficient Transformers for Pythia-70M & OPT-125M</p>
+        </div>
+
+        <!-- Attention Visualization -->
+        <div class="attention-container">
+            <div class="attention-box">
+                <h3>❌ Dense Attention</h3>
+                <canvas id="denseCanvas"></canvas>
+                <div class="metrics">
+                    <div class="metric-item">
+                        <div class="metric-label">Complexity</div>
+                        <div class="metric-value">O(n²)</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Connections</div>
+                        <div class="metric-value">100%</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Memory</div>
+                        <div class="metric-value">3.6 GB</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Speed</div>
+                        <div class="metric-value">Baseline</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="attention-box">
+                <h3>✅ Sparse Attention</h3>
+                <canvas id="sparseCanvas"></canvas>
+                <div class="metrics">
+                    <div class="metric-item">
+                        <div class="metric-label">Complexity</div>
+                        <div class="metric-value">O(n√n)</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Connections</div>
+                        <div class="metric-value">25-75%</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Memory</div>
+                        <div class="metric-value">2.9 GB</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-label">Speed</div>
+                        <div class="metric-value">2-4× Faster</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Patterns Section -->
+        <div class="patterns-section">
+            <h2>🎯 Three Sparse Patterns</h2>
+            <div class="pattern-grid">
+                <div class="pattern-card">
+                    <div class="pattern-name">Local (Sliding Window)</div>
+                    <canvas class="pattern-canvas" id="localPattern"></canvas>
+                    <div class="pattern-desc">
+                        <strong>75% Sparse</strong><br>
+                        Attends to nearby tokens
+                    </div>
+                </div>
+
+                <div class="pattern-card">
+                    <div class="pattern-name">Global (Strided)</div>
+                    <canvas class="pattern-canvas" id="globalPattern"></canvas>
+                    <div class="pattern-desc">
+                        <strong>50% Sparse</strong><br>
+                        Long-range dependencies
+                    </div>
+                </div>
+
+                <div class="pattern-card">
+                    <div class="pattern-name">Mixed</div>
+                    <canvas class="pattern-canvas" id="mixedPattern"></canvas>
+                    <div class="pattern-desc">
+                        <strong>60-70% Sparse</strong><br>
+                        Best balance
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Section -->
+        <div class="performance-section">
+            <h2>📊 Performance Improvements</h2>
+
+            <div style="width: 90%; max-width: 1200px; margin: 0 auto;">
+                <h3 style="text-align: left; margin: 20px 0 15px; font-size: 1.3em;">Speedup by Sequence Length:</h3>
+                <div class="speedup-bar">
+                    <div class="speedup-label">64 tokens</div>
+                    <div class="speedup-bar-bg">
+                        <div class="speedup-bar-fill" style="width: 48.25%; animation-delay: 1.8s;">
+                            <span class="speedup-value">1.93×</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="speedup-bar">
+                    <div class="speedup-label">128 tokens</div>
+                    <div class="speedup-bar-bg">
+                        <div class="speedup-bar-fill" style="width: 60.5%; animation-delay: 1.9s;">
+                            <span class="speedup-value">2.42×</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="speedup-bar">
+                    <div class="speedup-label">256 tokens</div>
+                    <div class="speedup-bar-bg">
+                        <div class="speedup-bar-fill" style="width: 75%; animation-delay: 2s;">
+                            <span class="speedup-value">3.00×</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="speedup-bar">
+                    <div class="speedup-label">512 tokens</div>
+                    <div class="speedup-bar-bg">
+                        <div class="speedup-bar-fill" style="width: 100%; animation-delay: 2.1s;">
+                            <span class="speedup-value">4.03×</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="performance-grid" style="margin-top: 40px;">
+                <div class="perf-card">
+                    <div class="perf-icon">⚡</div>
+                    <div class="perf-value">2-4×</div>
+                    <div class="perf-label">Faster Training</div>
+                </div>
+
+                <div class="perf-card">
+                    <div class="perf-icon">💾</div>
+                    <div class="perf-value">20%</div>
+                    <div class="perf-label">Memory Saved</div>
+                </div>
+
+                <div class="perf-card">
+                    <div class="perf-icon">📈</div>
+                    <div class="perf-value">&lt;0.1</div>
+                    <div class="perf-label">Loss Difference</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Models Section -->
+        <div class="models-section">
+            <h2 style="text-align: center; font-size: 2em; margin-bottom: 30px; color: #00d4ff;">🤖 Implemented Models</h2>
+            <div class="models-grid">
+                <div class="model-card">
+                    <div class="model-name">Pythia-70M</div>
+                    <div class="model-stats">
+                        <div class="stat">
+                            <div class="stat-label">Layers</div>
+                            <div class="stat-value">6</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Hidden Dim</div>
+                            <div class="stat-value">512</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Heads</div>
+                            <div class="stat-value">8</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Parameters</div>
+                            <div class="stat-value">70M</div>
+                        </div>
+                    </div>
+                    <p style="margin-top: 15px; color: #a0aec0; font-size: 0.95em;">EleutherAI's research model for scaling studies</p>
+                </div>
+
+                <div class="model-card">
+                    <div class="model-name">OPT-125M</div>
+                    <div class="model-stats">
+                        <div class="stat">
+                            <div class="stat-label">Layers</div>
+                            <div class="stat-value">12</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Hidden Dim</div>
+                            <div class="stat-value">768</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Heads</div>
+                            <div class="stat-value">12</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Parameters</div>
+                            <div class="stat-value">125M</div>
+                        </div>
+                    </div>
+                    <p style="margin-top: 15px; color: #a0aec0; font-size: 0.95em;">Meta's Open Pre-trained Transformer</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <h3>✨ Key Technologies</h3>
+            <p>
+                <strong>Needle Framework</strong> • <strong>CUDA Optimization</strong> • <strong>Block-Sparse Attention</strong> •
+                <strong>Efficient Training</strong> • <strong>Memory Management</strong>
+            </p>
+            <p style="margin-top: 20px; font-size: 1.1em;">
+                <strong>2-4× Speedup • Same Quality • Lower Memory</strong>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Utility function to draw grid
+        function drawGrid(canvas, rows, cols) {
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            const cellW = w / cols;
+            const cellH = h / rows;
+
+            ctx.fillStyle = 'rgba(0, 212, 255, 0.1)';
+            ctx.strokeStyle = 'rgba(0, 212, 255, 0.3)';
+            ctx.lineWidth = 1;
+
+            for (let i = 0; i <= rows; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellH);
+                ctx.lineTo(w, i * cellH);
+                ctx.stroke();
+            }
+            for (let i = 0; i <= cols; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellW, 0);
+                ctx.lineTo(i * cellW, h);
+                ctx.stroke();
+            }
+
+            return { cellW, cellH };
+        }
+
+        // Draw dense attention
+        function drawDenseAttention() {
+            const canvas = document.getElementById('denseCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const rows = 8, cols = 8;
+            const { cellW, cellH } = drawGrid(canvas, rows, cols);
+
+            // Draw all connections
+            ctx.strokeStyle = 'rgba(255, 100, 100, 0.6)';
+            ctx.lineWidth = 0.5;
+
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    const x1 = j * cellW + cellW / 2;
+                    const y1 = i * cellH + cellH / 2;
+
+                    for (let k = 0; k < cols; k++) {
+                        const x2 = k * cellW + cellW / 2;
+                        const y2 = (i + 1) * cellH + cellH / 2;
+                        if (y2 < canvas.height) {
+                            ctx.beginPath();
+                            ctx.moveTo(x1, y1);
+                            ctx.lineTo(x2, y2);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            // Highlight query and key positions
+            ctx.fillStyle = 'rgba(255, 100, 100, 0.8)';
+            for (let j = 0; j < cols; j++) {
+                ctx.fillRect(j * cellW + 2, 2, cellW - 4, cellH - 4);
+            }
+        }
+
+        // Draw sparse attention
+        function drawSparseAttention() {
+            const canvas = document.getElementById('sparseCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const rows = 8, cols = 8;
+            const { cellW, cellH } = drawGrid(canvas, rows, cols);
+
+            // Draw sparse connections
+            ctx.strokeStyle = 'rgba(0, 255, 136, 0.6)';
+            ctx.lineWidth = 0.5;
+
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    const x1 = j * cellW + cellW / 2;
+                    const y1 = i * cellH + cellH / 2;
+
+                    // Only connect to nearby and spaced positions
+                    const targets = [j - 1, j, j + 1, Math.floor(j / 2) * 2].filter(k => k >= 0 && k < cols);
+                    const uniqueTargets = [...new Set(targets)];
+
+                    for (let k of uniqueTargets) {
+                        const x2 = k * cellW + cellW / 2;
+                        const y2 = (i + 1) * cellH + cellH / 2;
+                        if (y2 < canvas.height) {
+                            ctx.beginPath();
+                            ctx.moveTo(x1, y1);
+                            ctx.lineTo(x2, y2);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            // Highlight query positions
+            ctx.fillStyle = 'rgba(0, 255, 136, 0.8)';
+            for (let j = 0; j < cols; j++) {
+                ctx.fillRect(j * cellW + 2, 2, cellW - 4, cellH - 4);
+            }
+        }
+
+        // Draw local pattern
+        function drawLocalPattern() {
+            const canvas = document.getElementById('localPattern');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const size = 8;
+            const cellW = canvas.width / size;
+            const cellH = canvas.height / size;
+
+            // Draw grid
+            ctx.strokeStyle = 'rgba(0, 212, 255, 0.2)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= size; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellH);
+                ctx.lineTo(canvas.width, i * cellH);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(i * cellW, 0);
+                ctx.lineTo(i * cellW, canvas.height);
+                ctx.stroke();
+            }
+
+            // Draw local attention window
+            const querRow = 3;
+            ctx.fillStyle = 'rgba(255, 150, 0, 0.3)';
+            for (let j = Math.max(0, querRow - 1); j <= Math.min(size - 1, querRow + 1); j++) {
+                ctx.fillRect(j * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+            }
+
+            // Highlight query
+            ctx.fillStyle = 'rgba(255, 150, 0, 0.8)';
+            ctx.fillRect(querRow * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+
+            // Draw arrow
+            ctx.strokeStyle = 'rgba(255, 150, 0, 0.6)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(querRow * cellW + cellW / 2, querRow * cellH - 10, 3, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Draw global pattern
+        function drawGlobalPattern() {
+            const canvas = document.getElementById('globalPattern');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const size = 8;
+            const cellW = canvas.width / size;
+            const cellH = canvas.height / size;
+
+            // Draw grid
+            ctx.strokeStyle = 'rgba(0, 212, 255, 0.2)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= size; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellH);
+                ctx.lineTo(canvas.width, i * cellH);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(i * cellW, 0);
+                ctx.lineTo(i * cellW, canvas.height);
+                ctx.stroke();
+            }
+
+            // Draw strided attention
+            const querRow = 3;
+            ctx.fillStyle = 'rgba(0, 255, 200, 0.3)';
+            for (let j = 0; j < size; j += 2) {
+                ctx.fillRect(j * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+            }
+
+            // Highlight query
+            ctx.fillStyle = 'rgba(0, 255, 200, 0.8)';
+            ctx.fillRect(querRow * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+        }
+
+        // Draw mixed pattern
+        function drawMixedPattern() {
+            const canvas = document.getElementById('mixedPattern');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const size = 8;
+            const cellW = canvas.width / size;
+            const cellH = canvas.height / size;
+
+            // Draw grid
+            ctx.strokeStyle = 'rgba(0, 212, 255, 0.2)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= size; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellH);
+                ctx.lineTo(canvas.width, i * cellH);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(i * cellW, 0);
+                ctx.lineTo(i * cellW, canvas.height);
+                ctx.stroke();
+            }
+
+            // Draw local + global
+            const querRow = 3;
+            const positions = new Set();
+
+            // Local
+            for (let j = Math.max(0, querRow - 1); j <= Math.min(size - 1, querRow + 1); j++) {
+                positions.add(j);
+            }
+
+            // Global
+            for (let j = 0; j < size; j += 2) {
+                positions.add(j);
+            }
+
+            ctx.fillStyle = 'rgba(150, 100, 255, 0.3)';
+            for (let j of positions) {
+                ctx.fillRect(j * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+            }
+
+            // Highlight query
+            ctx.fillStyle = 'rgba(150, 100, 255, 0.8)';
+            ctx.fillRect(querRow * cellW + 2, querRow * cellH + 2, cellW - 4, cellH - 4);
+        }
+
+        // Initialize on load
+        window.addEventListener('load', () => {
+            drawDenseAttention();
+            drawSparseAttention();
+            drawLocalPattern();
+            drawGlobalPattern();
+            drawMixedPattern();
+        });
+
+        // Redraw on resize
+        window.addEventListener('resize', () => {
+            drawDenseAttention();
+            drawSparseAttention();
+            drawLocalPattern();
+            drawGlobalPattern();
+            drawMixedPattern();
+        });
+    </script>
+</body>
+</html>
