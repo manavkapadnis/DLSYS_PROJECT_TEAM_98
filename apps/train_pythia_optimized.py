@@ -32,7 +32,7 @@ def load_dataset_huggingface(dataset_name, max_tokens=None, vocab_size=10000):
         val_text = " ".join(dataset["validation"]["text"])
     elif dataset_name == "tinystories":
         dataset = load_dataset("roneneldan/TinyStories")
-        train_text = " ".join([item["text"] for item in dataset["train"][:10000]])
+        train_text = " ".join([print(item) for item in dataset["train"][:10000]])
         val_text = " ".join([item["text"] for item in dataset["validation"][:1000]])
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
